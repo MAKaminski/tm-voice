@@ -1,0 +1,33 @@
+{
+  "name": "tm-voice",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Transparent Maintenance outbound voice agent",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@11.22.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter './apps/*' dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "erd:check": "tsx scripts/erd-check.ts",
+    "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm erd:check && pnpm build",
+    "db:generate": "pnpm --filter @tm/db generate",
+    "db:migrate": "pnpm --filter @tm/db migrate",
+    "db:seed": "pnpm --filter @tm/db seed",
+    "replay": "pnpm --filter @tm/worker replay",
+    "erd:write": "tsx scripts/erd-check.ts --write"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "@tm/db": "workspace:*",
+    "drizzle-orm": "^0.44.0"
+  }
+}

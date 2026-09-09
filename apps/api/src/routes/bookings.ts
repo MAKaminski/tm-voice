@@ -1,0 +1,92 @@
+import { and, desc, eq } from "drizzle-orm";
+import { Hono } from "hono";
+import { z } from "zod";
+import { booking, campaign, contact, serviceAddress, technician } from "@tm/db";
+import { idempotencyKey } from "@tm/shared";
+import type { AppEnv } from "../app.js";
+import { internalAuth } from "../middleware.js";
+
+const bookBody = z.object({
+  technician_id: z.string().uuid(),
+  service_address_id: z.string().uuid(),
+  window_start: z.string().datetime(),
+  arrival_window_min: z.number().int().positive().default(120),
+});
+
+/**
+ * Public, token-per-contact booking page API (/book/:token) and internal listing routes.
+ * Booking status is pending_review unless AUTO_BOOK=true (settled: false — a human reviews every booking).
+ */
+export function bookingRoutes() {
+  const app = new Hono<AppEnv>();
+
+  app.get("/book/:token", async (c) => {
+    const { db } = c.get("deps");
+    const [ct] = await db.select().from(contact).where(eq(contact.bookingToken, c.req.param("token")));
+    if (!ct) return c.json({ error: "invalid_token" }, 404);
+    const addresses = await db.select().from(serviceAddress).where(eq(serviceAddress.accountId, ct.accountId));
+    const addr = addresses[0];
+    const earliest = new Date();
+    const slots = addr ? await c.get("availability").getSlots({ serviceAddressId: addr.id, earliest, latest: new Date(earliest.getTime() + 14 * 86_400_000) }) : [];
+    return c.json({ contact: { first_name: ct.firstName, last_name: ct.lastName }, addresses, slots });
+  });
+
+  app.post("/book/:token", async (c) => {
+    const { db, cfg, producer } = c.get("deps");
+    const [ct] = await db.select().from(contact).where(eq(contact.bookingToken, c.req.param("token")));
+    if (!ct) return c.json({ error: "invalid_token" }, 404);
+    const p = bookBody.safeParse(await c.req.json().catch(() => ({})));
+    if (!p.success) return c.json({ error: "invalid_body", issues: p.error.flatten() }, 400);
+
+    const windowStart = new Date(p.data.window_start);
+    const slots = await c.get("availability").getSlots({ serviceAddressId: p.data.service_address_id, earliest: new Date(windowStart.getTime() - 1), latest: new Date(windowStart.getTime() + 86_400_000), limit: 5 });
+    const still = slots.find((s) => s.window_start === windowStart.toISOString() && s.technician_id === p.data.technician_id);
+    if (!still) return c.json({ error: "slot_unavailable" }, 409);
+
+    const key = idempotencyKey("booking", ct.id, windowStart.toISOString());
+    const [row] = await db.insert(booking).values({
+      contactId: ct.id, technicianId: p.data.technician_id, serviceAddressId: p.data.service_address_id, windowStart,
+      arrivalWindowMin: p.data.arrival_window_min, status: cfg.AUTO_BOOK ? "approved" : "pending_review", idempotencyKey: key,
+    }).onConflictDoNothing({ target: booking.idempotencyKey }).returning();
+    const saved = row ?? (await db.select().from(booking).where(eq(booking.idempotencyKey, key)))[0]!;
+    if (row && cfg.AUTO_BOOK) await enqueueFulfillment(producer, saved.id);
+    await c.get("availability").invalidate();
+    return c.json({ booking: saved }, row ? 201 : 200);
+  });
+
+  app.get("/bookings", internalAuth, async (c) => {
+    const { db } = c.get("deps");
+    const status = c.req.query("status");
+    const rows = await db.select({ booking, contact: { firstName: contact.firstName, lastName: contact.lastName, phone: contact.phoneE164 }, technician: { name: technician.name } })
+      .from(booking).innerJoin(contact, eq(contact.id, booking.contactId)).innerJoin(technician, eq(technician.id, booking.technicianId))
+      .where(status ? eq(booking.status, status as typeof booking.$inferSelect.status) : undefined).orderBy(desc(booking.createdAt)).limit(100);
+    return c.json({ bookings: rows });
+  });
+
+  app.post("/bookings/:id/review", internalAuth, async (c) => {
+    const { db, producer } = c.get("deps");
+    const body = z.object({ decision: z.enum(["approve", "reject"]), reviewed_by: z.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ error: "invalid_body" }, 400);
+    const [row] = await db.update(booking).set({ status: body.data.decision === "approve" ? "approved" : "rejected", reviewedBy: body.data.reviewed_by, reviewedAt: new Date() })
+      .where(and(eq(booking.id, c.req.param("id")), eq(booking.status, "pending_review"))).returning();
+    if (!row) return c.json({ error: "not_pending" }, 409);
+    if (row.status === "approved") await enqueueFulfillment(producer, row.id);
+    return c.json({ booking: row });
+  });
+
+  app.get("/campaigns", internalAuth, async (c) => {
+    const { db } = c.get("deps");
+    return c.json({ campaigns: await db.select().from(campaign).orderBy(desc(campaign.createdAt)) });
+  });
+  return app;
+}
+
+/** Approval fans out to the three fulfillment queues. Handlers are Phase 3/4 stubs; the envelope contract is fixed now. */
+async function enqueueFulfillment(producer: AppEnv["Variables"]["deps"]["producer"], bookingId: string) {
+  const now = new Date().toISOString();
+  await Promise.all([
+    producer.enqueue("hcp", "createJob", { entity_id: bookingId, idempotency_key: idempotencyKey("hcp", "createJob", bookingId), attempt: 0, enqueued_at: now }),
+    producer.enqueue("graph", "createEvent", { entity_id: bookingId, idempotency_key: idempotencyKey("graph", "createEvent", bookingId), attempt: 0, enqueued_at: now }),
+    producer.enqueue("resend", "sendPacket", { entity_id: bookingId, idempotency_key: idempotencyKey("resend", "sendPacket", bookingId), attempt: 0, enqueued_at: now }),
+  ]);
+}

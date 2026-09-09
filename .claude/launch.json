@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "api-local", "runtimeExecutable": "bash", "runtimeArgs": ["scripts/dev-local.sh", "api"], "port": 8787 },
+    { "name": "console-local", "runtimeExecutable": "bash", "runtimeArgs": ["scripts/dev-local.sh", "console"], "port": 3000 }
+  ]
+}

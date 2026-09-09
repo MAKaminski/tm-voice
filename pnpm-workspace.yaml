@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+allowBuilds:
+  esbuild: true
+  msgpackr-extract: true
+  "@electric-sql/pglite": true
+  sharp: true
+  bufferutil: true
+  utf-8-validate: true

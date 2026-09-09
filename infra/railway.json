@@ -1,0 +1,10 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "_comment": "One repo, three services. Create with: railway init -n tm-voice; then `railway add` Postgres and Redis plugins; then per service `railway up` with the matching rootDirectory/Dockerfile. Non-secret defaults below; secrets come from Railway variables per docs/RUNBOOK.md.",
+  "services": {
+    "api": { "build": { "builder": "DOCKERFILE", "dockerfilePath": "apps/api/Dockerfile" }, "deploy": { "healthcheckPath": "/health", "healthcheckTimeout": 60, "restartPolicyType": "ON_FAILURE", "restartPolicyMaxRetries": 5 } },
+    "worker": { "build": { "builder": "DOCKERFILE", "dockerfilePath": "apps/worker/Dockerfile" }, "deploy": { "restartPolicyType": "ON_FAILURE", "restartPolicyMaxRetries": 5 } },
+    "console": { "build": { "builder": "DOCKERFILE", "dockerfilePath": "apps/console/Dockerfile" }, "deploy": { "healthcheckPath": "/", "restartPolicyType": "ON_FAILURE" } }
+  },
+  "sharedVariables": { "NODE_ENV": "production", "DIAL_MODE": "dry_run", "COMPLIANCE_TARGET_SURFACE": "landline_only", "AUTO_BOOK": "false", "ALLOW_MA_RECORDING": "false" }
+}

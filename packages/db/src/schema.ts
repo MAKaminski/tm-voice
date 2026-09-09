@@ -1,0 +1,264 @@
+/**
+ * Drizzle schema = the ERD. docs/ERD.md is diffed against this file in CI (scripts/erd-check.ts).
+ * External vendor IDs are plain nullable text columns, never primary keys.
+ */
+import { sql } from "drizzle-orm";
+import {
+  boolean, date, index, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid,
+} from "drizzle-orm/pg-core";
+
+const id = () => uuid("id").primaryKey().defaultRandom();
+const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
+const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
+
+export const accountType = pgEnum("account_type", ["property_mgr", "homeowner"]);
+export const lineType = pgEnum("line_type", ["wireless", "landline", "voip", "unknown"]);
+export const campaignStatus = pgEnum("campaign_status", ["draft", "active", "paused", "completed"]);
+export const callTaskStatus = pgEnum("call_task_status", ["queued", "claimed", "dialed", "blocked", "done"]);
+export const gateResult = pgEnum("gate_result", ["pass", "surface", "suppressed", "dnc", "window", "did_cap", "attempts"]);
+export const disposition = pgEnum("disposition", [
+  "dry_run", "booked", "callback", "not_interested", "opt_out", "voicemail", "no_answer", "busy", "failed", "wrong_number",
+]);
+export const consentEventType = pgEnum("consent_event_type", ["grant", "revoke"]);
+export const bookingStatus = pgEnum("booking_status", ["pending_review", "approved", "rejected", "synced", "failed"]);
+export const scheduleBlockSource = pgEnum("schedule_block_source", ["hcp_job", "pto", "window"]);
+
+export const account = pgTable("account", {
+  id: id(),
+  name: text("name").notNull(),
+  type: accountType("type").notNull().default("property_mgr"),
+  apolloAccountId: text("apollo_account_id"),
+  hcpCustomerId: text("hcp_customer_id"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const contact = pgTable(
+  "contact",
+  {
+    id: id(),
+    accountId: uuid("account_id").notNull().references(() => account.id),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    email: text("email"),
+    phoneE164: text("phone_e164").notNull(),
+    lineType: lineType("line_type").notNull().default("unknown"),
+    state: text("state"),
+    timezone: text("timezone").notNull().default("America/New_York"),
+    apolloContactId: text("apollo_contact_id"),
+    dncFederal: boolean("dnc_federal").notNull().default(false),
+    dncState: boolean("dnc_state").notNull().default(false),
+    dncCheckedAt: timestamp("dnc_checked_at", { withTimezone: true }),
+    bookingToken: text("booking_token").notNull().default(sql`gen_random_uuid()::text`),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("contact_phone_idx").on(t.phoneE164), uniqueIndex("contact_booking_token_uq").on(t.bookingToken)],
+);
+
+export const serviceAddress = pgTable("service_address", {
+  id: id(),
+  accountId: uuid("account_id").notNull().references(() => account.id),
+  line1: text("line1").notNull(),
+  line2: text("line2"),
+  city: text("city"),
+  state: text("state"),
+  zip: text("zip"),
+  lat: numeric("lat", { precision: 9, scale: 6 }),
+  lon: numeric("lon", { precision: 9, scale: 6 }),
+  hcpAddressId: text("hcp_address_id"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const scriptVersion = pgTable("script_version", {
+  id: id(),
+  name: text("name").notNull(),
+  disclosureLine: text("disclosure_line").notNull(),
+  body: text("body").notNull().default(""),
+  active: boolean("active").notNull().default(false),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const campaign = pgTable("campaign", {
+  id: id(),
+  name: text("name").notNull(),
+  scriptVersionId: uuid("script_version_id").notNull().references(() => scriptVersion.id),
+  apolloSavedSearchId: text("apollo_saved_search_id"),
+  dailyDialCap: integer("daily_dial_cap").notNull().default(50),
+  maxAttempts: integer("max_attempts").notNull().default(3),
+  status: campaignStatus("status").notNull().default("draft"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const callTask = pgTable(
+  "call_task",
+  {
+    id: id(),
+    campaignId: uuid("campaign_id").notNull().references(() => campaign.id),
+    contactId: uuid("contact_id").notNull().references(() => contact.id),
+    earliestDialAt: timestamp("earliest_dial_at", { withTimezone: true }).notNull().defaultNow(),
+    attemptNo: integer("attempt_no").notNull().default(0),
+    status: callTaskStatus("status").notNull().default("queued"),
+    gateResult: gateResult("gate_result"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("call_task_claim_idx").on(t.campaignId, t.earliestDialAt).where(sql`status = 'queued'`)],
+);
+
+export const did = pgTable("did", {
+  id: id(),
+  phoneE164: text("phone_e164").notNull().unique(),
+  attestation: text("attestation").notNull().default("A"),
+  dailyCap: integer("daily_cap").notNull().default(50),
+  labelStatus: text("label_status").notNull().default("unknown"),
+  telnyxNumberId: text("telnyx_number_id"),
+  active: boolean("active").notNull().default(true),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const call = pgTable("call", {
+  id: id(),
+  callTaskId: uuid("call_task_id").notNull().references(() => callTask.id),
+  didId: uuid("did_id").references(() => did.id),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+  durationSec: integer("duration_sec").notNull().default(0),
+  disposition: disposition("disposition"),
+  apolloPhoneCallId: text("apollo_phone_call_id"),
+  vapiCallId: text("vapi_call_id"),
+  telnyxCallControlId: text("telnyx_call_control_id"),
+  costUsd: numeric("cost_usd", { precision: 8, scale: 4 }).notNull().default("0"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const recording = pgTable("recording", {
+  id: id(),
+  callId: uuid("call_id").notNull().references(() => call.id),
+  r2Key: text("r2_key").notNull(),
+  signedUrl: text("signed_url"),
+  signedUrlExpiresAt: timestamp("signed_url_expires_at", { withTimezone: true }),
+  retainUntil: date("retain_until").notNull(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const transcript = pgTable("transcript", {
+  id: id(),
+  callId: uuid("call_id").notNull().references(() => call.id),
+  turns: jsonb("turns").notNull().default([]),
+  summary: text("summary"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+/** Append-only: a DB trigger (migrations/0001_consent_immutable.sql) rejects UPDATE and DELETE. */
+export const consentEvent = pgTable(
+  "consent_event",
+  {
+    id: id(),
+    contactId: uuid("contact_id").notNull().references(() => contact.id),
+    callId: uuid("call_id").references(() => call.id),
+    eventType: consentEventType("event_type").notNull(),
+    channel: text("channel").notNull(),
+    captureArtifact: jsonb("capture_artifact").notNull().default({}),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("consent_event_contact_idx").on(t.contactId, t.occurredAt)],
+);
+
+/** Keys on phone number, never on contact. */
+export const suppression = pgTable("suppression", {
+  id: id(),
+  phoneE164: text("phone_e164").notNull().unique(),
+  reason: text("reason").notNull(),
+  sourceCallId: uuid("source_call_id").references(() => call.id),
+  createdAt: createdAt(),
+});
+
+export const technician = pgTable("technician", {
+  id: id(),
+  name: text("name").notNull(),
+  hcpEmployeeId: text("hcp_employee_id"),
+  maxJobsPerDay: integer("max_jobs_per_day").notNull().default(2),
+  maxMilesBetweenJobs: integer("max_miles_between_jobs").notNull().default(50),
+  homeLat: numeric("home_lat", { precision: 9, scale: 6 }),
+  homeLon: numeric("home_lon", { precision: 9, scale: 6 }),
+  active: boolean("active").notNull().default(true),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const scheduleBlock = pgTable(
+  "schedule_block",
+  {
+    id: id(),
+    technicianId: uuid("technician_id").notNull().references(() => technician.id),
+    startAt: timestamp("start_at", { withTimezone: true }).notNull(),
+    endAt: timestamp("end_at", { withTimezone: true }).notNull(),
+    source: scheduleBlockSource("source").notNull(),
+    hcpJobId: text("hcp_job_id"),
+    lat: numeric("lat", { precision: 9, scale: 6 }),
+    lon: numeric("lon", { precision: 9, scale: 6 }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("schedule_block_tech_start_idx").on(t.technicianId, t.startAt)],
+);
+
+export const booking = pgTable(
+  "booking",
+  {
+    id: id(),
+    callId: uuid("call_id").references(() => call.id),
+    contactId: uuid("contact_id").notNull().references(() => contact.id),
+    technicianId: uuid("technician_id").notNull().references(() => technician.id),
+    serviceAddressId: uuid("service_address_id").notNull().references(() => serviceAddress.id),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    arrivalWindowMin: integer("arrival_window_min").notNull().default(120),
+    hcpJobId: text("hcp_job_id"),
+    status: bookingStatus("status").notNull().default("pending_review"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    reviewedBy: text("reviewed_by"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("booking_idempotency_uq").on(t.idempotencyKey)],
+);
+
+export const calendarInvite = pgTable("calendar_invite", {
+  id: id(),
+  bookingId: uuid("booking_id").notNull().references(() => booking.id),
+  graphEventId: text("graph_event_id"),
+  rsvpStatus: text("rsvp_status").notNull().default("none"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const emailSend = pgTable(
+  "email_send",
+  {
+    id: id(),
+    bookingId: uuid("booking_id").notNull().references(() => booking.id),
+    template: text("template").notNull(),
+    providerMessageId: text("provider_message_id"),
+    status: text("status").notNull().default("queued"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("email_send_idempotency_uq").on(t.idempotencyKey)],
+);
+
+export const schema = {
+  account, contact, serviceAddress, scriptVersion, campaign, callTask, did, call, recording, transcript,
+  consentEvent, suppression, technician, scheduleBlock, booking, calendarInvite, emailSend,
+};

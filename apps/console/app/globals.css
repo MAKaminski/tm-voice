@@ -1,0 +1,20 @@
+:root { color-scheme: light; --ink: #131d19; --muted: #576760; --line: #d8deda; --accent: #0e6b54; --accent-soft: #dcede6; --bg: #f4f6f4; --surface: #fff; --alert: #9e2b2b; --amber: #9c5b0a; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+main { max-width: 900px; margin: 0 auto; padding: 32px 20px 80px; }
+nav { display: flex; gap: 18px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--surface); font-size: 13px; }
+nav a { color: var(--muted); text-decoration: none; } nav a.brand { color: var(--ink); font-weight: 600; }
+h1 { font-size: 26px; margin: 0 0 6px; } h2 { font-size: 17px; margin: 28px 0 10px; }
+p.lede { color: var(--muted); margin: 0 0 20px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 18px; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; } th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 8px 10px; border-bottom: 1px solid var(--line); } td { padding: 9px 10px; border-bottom: 1px solid var(--line); }
+.pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 3px; background: var(--accent-soft); color: var(--accent); text-transform: uppercase; }
+.pill.warn { background: #f7e9d5; color: var(--amber); } .pill.bad { background: #f6e0df; color: var(--alert); }
+.slots { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); margin: 12px 0 20px; }
+.slot { border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; background: var(--surface); cursor: pointer; text-align: left; font: inherit; }
+.slot[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.slot small { display: block; color: var(--muted); }
+button.primary { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+button.primary:disabled { opacity: .5; cursor: default; }
+.empty { color: var(--muted); padding: 24px; text-align: center; border: 1px dashed var(--line); border-radius: 6px; }
+.err { color: var(--alert); }
