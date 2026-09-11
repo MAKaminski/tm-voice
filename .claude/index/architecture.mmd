@@ -1,0 +1,18 @@
+flowchart TB
+  subgraph frontend["Front-end · user interface"]
+    direction LR
+    _tm_adapters["@tm/adapters"]
+    _tm_api["@tm/api"]
+    _tm_compliance["@tm/compliance"]
+    _tm_console["@tm/console"]
+    _tm_db["@tm/db"]
+    _tm_shared["@tm/shared"]
+    _tm_worker["@tm/worker"]
+    tm_voice["tm-voice"]
+  end
+  classDef declared stroke-dasharray:5 4,stroke-width:2px;
+  classDef fe fill:#e8f3f4,stroke:#1F6F78,color:#12191B;
+  classDef mw fill:#eef1ef,stroke:#5A686C,color:#12191B;
+  classDef be fill:#eaf1ec,stroke:#2C6249,color:#12191B;
+  classDef inf fill:#f4efe6,stroke:#8A6210,color:#12191B;
+  class tm_voice,_tm_shared,_tm_compliance,_tm_adapters,_tm_db,_tm_api,_tm_worker,_tm_console fe;
