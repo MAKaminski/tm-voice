@@ -88,8 +88,20 @@ export const configSchema = z
 
 export type Config = z.infer<typeof configSchema>;
 
+/**
+ * A variable set to an empty (or whitespace-only) string means "not set".
+ * Railway hands a declared-but-blank variable to the container as "", and
+ * infra/env.example ships every vendor key blank — both must read as absent
+ * so dry_run boots on mocks instead of failing `.min(1)`.
+ */
+function dropBlanks(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([, v]) => typeof v !== "string" || v.trim() !== ""),
+  );
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = configSchema.safeParse(env);
+  const parsed = configSchema.safeParse(dropBlanks(env));
   if (!parsed.success) {
     const lines = parsed.error.issues.map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`);
     throw new Error(`Invalid configuration:\n${lines.join("\n")}`);

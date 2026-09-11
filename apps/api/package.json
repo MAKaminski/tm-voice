@@ -20,7 +20,7 @@
     "@tm/db": "workspace:*",
     "@tm/shared": "workspace:*",
     "bullmq": "^5.34.0",
-    "drizzle-orm": "^0.44.0",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.6.0",
     "ioredis": "^5.4.0",
     "tsx": "^4.19.0",
@@ -29,6 +29,6 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^4.1.11"
   }
 }

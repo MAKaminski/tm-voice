@@ -1,7 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { Config } from "@tm/shared";
+import { AdapterError, type Config } from "@tm/shared";
 import { z } from "zod";
-import { type Adapter, MockRecorder, assertDialAllowed, e164, notImplemented, useMock, validate } from "../base.js";
+import { type Adapter, MockRecorder, assertDialAllowed, e164, request, useMock, validate } from "../base.js";
+
+const API = "https://api.vapi.ai";
 
 export const outboundCallInput = z.object({
   to: e164,
@@ -48,6 +50,25 @@ export function createVapiAdapter(cfg: Config): VapiAdapter & { mock?: MockRecor
       verifyWebhook(h, body) { return webhookOk(secret, h, body); },
     };
   }
+  const auth = { authorization: `Bearer ${cfg.VAPI_PRIVATE_KEY!}` };
+  /** phoneNumberId is cached per process: the DID set changes rarely and every dial would otherwise pay a lookup. */
+  const phoneNumberIds = new Map<string, string>();
+
+  async function resolvePhoneNumberId(fromE164: string): Promise<string> {
+    const hit = phoneNumberIds.get(fromE164);
+    if (hit) return hit;
+    const numbers = await request<{ id?: string; number?: string }[]>({ vendor: "vapi", url: `${API}/phone-number`, query: { limit: 1000 }, headers: auth });
+    for (const n of numbers ?? []) if (n.number && n.id) phoneNumberIds.set(n.number, n.id);
+    const id = phoneNumberIds.get(fromE164);
+    if (!id) {
+      throw new AdapterError({
+        vendor: "vapi", code: "unknown_from_number", retryable: false,
+        message: `${fromE164} is not imported into Vapi; import the Telnyx DID as a BYO phone number first`,
+      });
+    }
+    return id;
+  }
+
   return {
     name: "vapi", mode: "real",
     async healthcheck() {
@@ -57,9 +78,33 @@ export function createVapiAdapter(cfg: Config): VapiAdapter & { mock?: MockRecor
     async createOutboundCall(input) {
       const v = validate("vapi", outboundCallInput, input);
       assertDialAllowed(cfg, "vapi", v.to);
-      return notImplemented("vapi", "createOutboundCall");
+      const phoneNumberId = await resolvePhoneNumberId(v.from);
+      const res = await request<{ id?: string }>({
+        vendor: "vapi", method: "POST", url: `${API}/call`, headers: auth,
+        body: {
+          assistantId: v.assistant_id,
+          phoneNumberId,
+          customer: { number: v.to },
+          // Vapi's call object has no metadata field, so the correlation id rides in `name`
+          // (max 40 chars, and a UUID is 36). The post-call webhook reads it back to find the call_task.
+          name: v.metadata.call_task_id,
+        },
+      });
+      if (!res.id) throw new AdapterError({ vendor: "vapi", code: "missing_call_id", retryable: false, raw: res });
+      return { id: res.id, synthetic: false };
     },
-    async getCall() { return notImplemented("vapi", "getCall"); },
+    async getCall(id) {
+      const res = await request<{
+        id?: string; status?: string;
+        artifact?: { recordingUrl?: string; stereoRecordingUrl?: string; transcript?: string };
+      }>({ vendor: "vapi", url: `${API}/call/${encodeURIComponent(id)}`, headers: auth });
+      return {
+        id: res.id ?? id,
+        status: res.status ?? "unknown",
+        recording_url: res.artifact?.recordingUrl ?? res.artifact?.stereoRecordingUrl,
+        transcript: res.artifact?.transcript,
+      };
+    },
     verifyWebhook(h, body) { return webhookOk(cfg.VAPI_WEBHOOK_SECRET!, h, body); },
   };
 }

@@ -84,6 +84,20 @@ export function createHcpAdapter(cfg: Config, state: HcpMockState = defaultHcpMo
       verifyWebhook() { return true; },
     };
   }
+  /**
+   * Housecall Pro is the one vendor whose wire format could not be pinned down. Its reference at
+   * docs.housecallpro.com renders entirely client-side and publishes no OpenAPI document, so the
+   * request and response shapes are unverified: the auth scheme (`Bearer` vs `Token`) is reported
+   * inconsistently, the scheduled-date filter parameters on GET /jobs are undocumented in any
+   * fetchable source, the list envelope and its pagination fields are unconfirmed, no
+   * arrival-window endpoint is confirmed to exist, and the webhook signing scheme is unpublished.
+   *
+   * Guessing those would put fabricated endpoints on the path that materializes technician
+   * availability and writes jobs back, so these stay unimplemented until the API can be read
+   * against a real key — which is also still an open question (RUNBOOK check 1: whether the MAX
+   * plan can mint one at all). The mock above keeps the availability service running meanwhile.
+   */
+  const blocked = "unverified: docs.housecallpro.com publishes no fetchable API reference. Confirm the auth scheme, /jobs date filters, list envelope, arrival-window endpoint and webhook signing against a real key (RUNBOOK §0 check 1), then implement";
   return {
     name: "hcp", mode: "real",
     async healthcheck() {
@@ -91,10 +105,10 @@ export function createHcpAdapter(cfg: Config, state: HcpMockState = defaultHcpMo
       const r = await fetch("https://api.housecallpro.com/company", { headers: { Authorization: `Bearer ${cfg.HCP_API_KEY!}`, Accept: "application/json" } });
       return { vendor: "hcp", ok: r.ok, mode: "real", detail: r.ok ? undefined : `HTTP ${r.status} (try Token scheme)` };
     },
-    async listEmployees() { return notImplemented("hcp", "listEmployees"); },
-    async listJobs() { return notImplemented("hcp", "listJobs"); },
-    async getScheduleWindows() { return notImplemented("hcp", "getScheduleWindows"); },
-    async createJob() { return notImplemented("hcp", "createJob"); },
-    verifyWebhook() { return notImplemented("hcp", "verifyWebhook"); },
+    async listEmployees() { return notImplemented("hcp", "listEmployees", blocked); },
+    async listJobs() { return notImplemented("hcp", "listJobs", blocked); },
+    async getScheduleWindows() { return notImplemented("hcp", "getScheduleWindows", blocked); },
+    async createJob() { return notImplemented("hcp", "createJob", blocked); },
+    verifyWebhook() { return notImplemented("hcp", "verifyWebhook", blocked); },
   };
 }
