@@ -114,8 +114,8 @@ export async function request<T = unknown>(opts: RequestOptions): Promise<T> {
   }, opts.retry);
 }
 
-export function notImplemented(vendor: Vendor, method: string): never {
-  throw new AdapterError({ vendor, code: "not_implemented", retryable: false, message: `${vendor}.${method}: real adapter lands in Phase 3` });
+export function notImplemented(vendor: Vendor, method: string, because: string): never {
+  throw new AdapterError({ vendor, code: "not_implemented", retryable: false, message: `${vendor}.${method}: ${because}` });
 }
 
 /** Records every method call so tests and dry runs can inspect what would have happened. */

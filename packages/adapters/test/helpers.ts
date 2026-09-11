@@ -30,17 +30,27 @@ export interface StubResponse { status?: number; json?: unknown; text?: string }
 export function stubFetch(handler: (call: RecordedCall) => StubResponse | Promise<StubResponse>) {
   const calls: RecordedCall[] = [];
   vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    // Adapters call fetch(url, init); the AWS SDK's fetch handler calls fetch(new Request(...)).
+    const req = input instanceof Request ? input : undefined;
+    const rawHeaders = init?.headers ?? req?.headers;
+    const headers: Record<string, string> = {};
+    if (rawHeaders instanceof Headers) rawHeaders.forEach((v, k) => { headers[k.toLowerCase()] = v; });
+    else for (const [k, v] of Object.entries((rawHeaders ?? {}) as Record<string, string>)) headers[k.toLowerCase()] = v;
+    const body = init?.body ?? (req ? await req.clone().text() : undefined);
     const call: RecordedCall = {
-      url: String(input instanceof Request ? input.url : input),
-      method: init?.method ?? "GET",
-      headers: Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v])),
-      body: typeof init?.body === "string" ? init.body : undefined,
+      url: String(req ? req.url : input),
+      method: init?.method ?? req?.method ?? "GET",
+      headers,
+      body: typeof body === "string" && body.length ? body : undefined,
     };
     calls.push(call);
     const r = await handler(call);
     const status = r.status ?? 200;
     const text = r.text ?? (r.json === undefined ? "" : JSON.stringify(r.json));
-    return new Response(text, { status, headers: { "content-type": "application/json" } });
+    // Only claim JSON when the test actually supplied JSON: the S3 SDK parses by content-type
+    // and chokes on an empty body labelled application/json.
+    const resHeaders = r.json === undefined ? undefined : { "content-type": "application/json" };
+    return new Response(status === 204 || !text ? null : text, { status, headers: resHeaders });
   });
   return calls;
 }
