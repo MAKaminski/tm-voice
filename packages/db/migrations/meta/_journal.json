@@ -22,6 +22,13 @@
       "when": 1789148395207,
       "tag": "0002_absent_the_hood",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789149740564,
+      "tag": "0003_light_mimic",
+      "breakpoints": true
     }
   ]
 }

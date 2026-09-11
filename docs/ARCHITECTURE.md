@@ -72,6 +72,15 @@ Two things gate a dial regardless of keys, and both are easy to miss:
 - `contact.line_type` defaults to `unknown`, which `landline_only` refuses. `gateAndClaim` resolves it through the Telnyx carrier lookup and caches it on the contact for 90 days, mirroring the DNC cache beside it. A lookup failure rolls the transaction back and leaves the task `queued` rather than writing it off as blocked.
 - A `call_task` has to exist. `apollo.syncCampaign` creates them from a campaign's saved search — one task per (campaign, contact), enforced by a unique index, so re-runs are idempotent and re-attempts increment `attempt_no` on the same row.
 
+## Row-level security on the agents schema
+
+All 17 tables have RLS enabled and **no policies**, which is deliberate: no policy means no non-owner role can read or write a row, and these tables should never be reachable from a browser. Every table is owned by `postgres`, and a table owner bypasses RLS unless `FORCE ROW LEVEL SECURITY` is set, so the api and worker — which connect over the direct Postgres URL as that owner — are unaffected. The test suite proves it: 149 tests pass unchanged with RLS on.
+
+Two things not to undo later:
+
+- **Do not add a `service_role` policy.** Supabase's `rls_disabled` advisory suggests enabling RLS "with policies", but a policy here would *grant* access that does not currently exist. The intended state is deny-everything-except-the-owner.
+- **The grants are the real fence, and they came first.** `anon`, `authenticated`, `service_role` and `authenticator` hold no `USAGE` on the `agents` schema and no privilege on any table in it — verified, not assumed. Supabase's advisory describes tables "fully exposed to the anon key", which is the generic wording for a table in an exposed schema with the default grants; it does not hold for this schema. RLS is the second lock in case a future `GRANT` opens the first.
+
 ## Call flow
 
 ```mermaid
