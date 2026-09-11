@@ -39,6 +39,81 @@ export function validate<S extends z.ZodTypeAny>(vendor: Vendor, schema: S, inpu
   return r.data;
 }
 
+/** Statuses worth retrying: rate limits, timeouts, and anything the vendor calls its own fault. */
+export function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+export interface RequestOptions {
+  vendor: Vendor;
+  url: string;
+  method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+  headers?: Record<string, string>;
+  /** Serialized as JSON unless `rawBody` is set. */
+  body?: unknown;
+  rawBody?: string | Uint8Array;
+  query?: Record<string, string | number | boolean | undefined>;
+  /** "json" parses the response, "void" discards it, "text" returns the raw string. */
+  expect?: "json" | "void" | "text";
+  retry?: RetryOptions;
+  timeoutMs?: number;
+}
+
+/**
+ * The one HTTP call every real adapter goes through: query building, JSON encode/decode,
+ * a timeout, and status -> AdapterError mapping with consistent retryable semantics,
+ * wrapped in withRetry. Adapters map vendor payloads; they never map transport errors.
+ */
+export async function request<T = unknown>(opts: RequestOptions): Promise<T> {
+  const { vendor, method = "GET", expect = "json", timeoutMs = 15_000 } = opts;
+  const url = new URL(opts.url);
+  for (const [k, v] of Object.entries(opts.query ?? {})) {
+    if (v !== undefined) url.searchParams.set(k, String(v));
+  }
+  const headers: Record<string, string> = { accept: "application/json", ...opts.headers };
+  let body: string | Uint8Array | undefined = opts.rawBody;
+  if (body === undefined && opts.body !== undefined) {
+    body = JSON.stringify(opts.body);
+    headers["content-type"] ??= "application/json";
+  }
+
+  return withRetry(async () => {
+    const signal = AbortSignal.timeout(timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(url, { method, headers, body, signal });
+    } catch (e) {
+      // Transport-level: DNS, reset, timeout. Always worth another attempt.
+      const timedOut = e instanceof Error && e.name === "TimeoutError";
+      throw new AdapterError({
+        vendor, code: timedOut ? "timeout" : "network_error", retryable: true,
+        message: `${vendor}: ${method} ${url.pathname} ${timedOut ? `timed out after ${timeoutMs}ms` : "failed"}`,
+        raw: e instanceof Error ? e.message : e,
+      });
+    }
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new AdapterError({
+        vendor, code: `http_${res.status}`, retryable: isRetryableStatus(res.status),
+        message: `${vendor}: ${method} ${url.pathname} returned ${res.status}`,
+        raw: detail.slice(0, 2_000),
+      });
+    }
+    if (expect === "void") return undefined as T;
+    if (expect === "text") return (await res.text()) as T;
+    const text = await res.text();
+    if (!text) return undefined as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new AdapterError({
+        vendor, code: "invalid_response", retryable: false,
+        message: `${vendor}: ${method} ${url.pathname} returned non-JSON`, raw: text.slice(0, 500),
+      });
+    }
+  }, opts.retry);
+}
+
 export function notImplemented(vendor: Vendor, method: string): never {
   throw new AdapterError({ vendor, code: "not_implemented", retryable: false, message: `${vendor}.${method}: real adapter lands in Phase 3` });
 }

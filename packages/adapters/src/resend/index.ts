@@ -1,14 +1,14 @@
-import type { Config } from "@tm/shared";
+import { AdapterError, type Config } from "@tm/shared";
 import { z } from "zod";
-import { type Adapter, MockRecorder, notImplemented, useMock, validate } from "../base.js";
+import { type Adapter, MockRecorder, request, useMock, validate } from "../base.js";
 
 export const sendEmailInput = z.object({
   to: z.string().email(),
   subject: z.string(),
   html: z.string(),
   template: z.string(),
-  /** Resend `Idempotency-Key` header. */
-  idempotency_key: z.string(),
+  /** Resend `Idempotency-Key` header — Resend caps it at 256 chars and dedupes for 24h. */
+  idempotency_key: z.string().min(1).max(256),
 });
 export type SendEmailInput = z.infer<typeof sendEmailInput>;
 
@@ -38,6 +38,16 @@ export function createResendAdapter(cfg: Config): ResendAdapter & { mock?: MockR
       const r = await fetch("https://api.resend.com/domains", { headers: { Authorization: `Bearer ${cfg.RESEND_API_KEY!}` } });
       return { vendor: "resend", ok: r.ok, mode: "real", detail: r.ok ? undefined : `HTTP ${r.status}` };
     },
-    async sendEmail() { return notImplemented("resend", "sendEmail"); },
+    async sendEmail(input) {
+      const v = validate("resend", sendEmailInput, input);
+      const res = await request<{ id?: string }>({
+        vendor: "resend", method: "POST", url: "https://api.resend.com/emails",
+        // Resend dedupes on Idempotency-Key for 24h, so a retried job cannot send twice.
+        headers: { authorization: `Bearer ${cfg.RESEND_API_KEY!}`, "idempotency-key": v.idempotency_key },
+        body: { from: cfg.MAIL_FROM!, to: v.to, subject: v.subject, html: v.html },
+      });
+      if (!res.id) throw new AdapterError({ vendor: "resend", code: "missing_email_id", retryable: false, raw: res });
+      return { id: res.id };
+    },
   };
 }
