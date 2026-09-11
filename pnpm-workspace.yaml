@@ -1,6 +1,13 @@
 packages:
   - "apps/*"
   - "packages/*"
+# Transitive pins, both dev/build-time only and neither reachable from a request path.
+# postcss: next pins 8.4.31 exactly; the advisories are fixed in 8.5.23+.
+# esbuild: drizzle-kit still depends on the deprecated @esbuild-kit chain, which carries
+# esbuild 0.18. No newer drizzle-kit drops it, so the version is forced here instead.
+overrides:
+  postcss: "^8.5.28"
+  esbuild: "^0.25.12"
 allowBuilds:
   esbuild: true
   msgpackr-extract: true
