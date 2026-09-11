@@ -1,12 +1,12 @@
 {
-  "id": "f30b9152-a669-4992-803f-683f6621860a",
+  "id": "2041bee4-6d9d-407c-a24a-9ab085643b8f",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.account": {
+    "agents.account": {
       "name": "account",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -24,7 +24,7 @@
         "type": {
           "name": "type",
           "type": "account_type",
-          "typeSchema": "public",
+          "typeSchema": "agents",
           "primaryKey": false,
           "notNull": true,
           "default": "'property_mgr'"
@@ -64,9 +64,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.booking": {
+    "agents.booking": {
       "name": "booking",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -121,7 +121,7 @@
         "status": {
           "name": "status",
           "type": "booking_status",
-          "typeSchema": "public",
+          "typeSchema": "agents",
           "primaryKey": false,
           "notNull": true,
           "default": "'pending_review'"
@@ -181,6 +181,7 @@
           "name": "booking_call_id_call_id_fk",
           "tableFrom": "booking",
           "tableTo": "call",
+          "schemaTo": "agents",
           "columnsFrom": [
             "call_id"
           ],
@@ -194,6 +195,7 @@
           "name": "booking_contact_id_contact_id_fk",
           "tableFrom": "booking",
           "tableTo": "contact",
+          "schemaTo": "agents",
           "columnsFrom": [
             "contact_id"
           ],
@@ -207,6 +209,7 @@
           "name": "booking_technician_id_technician_id_fk",
           "tableFrom": "booking",
           "tableTo": "technician",
+          "schemaTo": "agents",
           "columnsFrom": [
             "technician_id"
           ],
@@ -220,6 +223,7 @@
           "name": "booking_service_address_id_service_address_id_fk",
           "tableFrom": "booking",
           "tableTo": "service_address",
+          "schemaTo": "agents",
           "columnsFrom": [
             "service_address_id"
           ],
@@ -236,9 +240,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.calendar_invite": {
+    "agents.calendar_invite": {
       "name": "calendar_invite",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -287,6 +291,7 @@
           "name": "calendar_invite_booking_id_booking_id_fk",
           "tableFrom": "calendar_invite",
           "tableTo": "booking",
+          "schemaTo": "agents",
           "columnsFrom": [
             "booking_id"
           ],
@@ -303,9 +308,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.call": {
+    "agents.call": {
       "name": "call",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -349,7 +354,7 @@
         "disposition": {
           "name": "disposition",
           "type": "disposition",
-          "typeSchema": "public",
+          "typeSchema": "agents",
           "primaryKey": false,
           "notNull": false
         },
@@ -399,6 +404,7 @@
           "name": "call_call_task_id_call_task_id_fk",
           "tableFrom": "call",
           "tableTo": "call_task",
+          "schemaTo": "agents",
           "columnsFrom": [
             "call_task_id"
           ],
@@ -412,6 +418,7 @@
           "name": "call_did_id_did_id_fk",
           "tableFrom": "call",
           "tableTo": "did",
+          "schemaTo": "agents",
           "columnsFrom": [
             "did_id"
           ],
@@ -428,9 +435,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.call_task": {
+    "agents.call_task": {
       "name": "call_task",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -468,7 +475,7 @@
         "status": {
           "name": "status",
           "type": "call_task_status",
-          "typeSchema": "public",
+          "typeSchema": "agents",
           "primaryKey": false,
           "notNull": true,
           "default": "'queued'"
@@ -476,7 +483,7 @@
         "gate_result": {
           "name": "gate_result",
           "type": "gate_result",
-          "typeSchema": "public",
+          "typeSchema": "agents",
           "primaryKey": false,
           "notNull": false
         },
@@ -530,6 +537,7 @@
           "name": "call_task_campaign_id_campaign_id_fk",
           "tableFrom": "call_task",
           "tableTo": "campaign",
+          "schemaTo": "agents",
           "columnsFrom": [
             "campaign_id"
           ],
@@ -543,6 +551,7 @@
           "name": "call_task_contact_id_contact_id_fk",
           "tableFrom": "call_task",
           "tableTo": "contact",
+          "schemaTo": "agents",
           "columnsFrom": [
             "contact_id"
           ],
@@ -559,9 +568,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.campaign": {
+    "agents.campaign": {
       "name": "campaign",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -605,7 +614,7 @@
         "status": {
           "name": "status",
           "type": "campaign_status",
-          "typeSchema": "public",
+          "typeSchema": "agents",
           "primaryKey": false,
           "notNull": true,
           "default": "'draft'"
@@ -631,6 +640,7 @@
           "name": "campaign_script_version_id_script_version_id_fk",
           "tableFrom": "campaign",
           "tableTo": "script_version",
+          "schemaTo": "agents",
           "columnsFrom": [
             "script_version_id"
           ],
@@ -647,9 +657,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.consent_event": {
+    "agents.consent_event": {
       "name": "consent_event",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -673,7 +683,7 @@
         "event_type": {
           "name": "event_type",
           "type": "consent_event_type",
-          "typeSchema": "public",
+          "typeSchema": "agents",
           "primaryKey": false,
           "notNull": true
         },
@@ -733,6 +743,7 @@
           "name": "consent_event_contact_id_contact_id_fk",
           "tableFrom": "consent_event",
           "tableTo": "contact",
+          "schemaTo": "agents",
           "columnsFrom": [
             "contact_id"
           ],
@@ -746,6 +757,7 @@
           "name": "consent_event_call_id_call_id_fk",
           "tableFrom": "consent_event",
           "tableTo": "call",
+          "schemaTo": "agents",
           "columnsFrom": [
             "call_id"
           ],
@@ -762,9 +774,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.contact": {
+    "agents.contact": {
       "name": "contact",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -806,7 +818,7 @@
         "line_type": {
           "name": "line_type",
           "type": "line_type",
-          "typeSchema": "public",
+          "typeSchema": "agents",
           "primaryKey": false,
           "notNull": true,
           "default": "'unknown'"
@@ -909,6 +921,7 @@
           "name": "contact_account_id_account_id_fk",
           "tableFrom": "contact",
           "tableTo": "account",
+          "schemaTo": "agents",
           "columnsFrom": [
             "account_id"
           ],
@@ -925,9 +938,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.did": {
+    "agents.did": {
       "name": "did",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -1007,9 +1020,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.email_send": {
+    "agents.email_send": {
       "name": "email_send",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -1086,6 +1099,7 @@
           "name": "email_send_booking_id_booking_id_fk",
           "tableFrom": "email_send",
           "tableTo": "booking",
+          "schemaTo": "agents",
           "columnsFrom": [
             "booking_id"
           ],
@@ -1102,9 +1116,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.recording": {
+    "agents.recording": {
       "name": "recording",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -1164,6 +1178,7 @@
           "name": "recording_call_id_call_id_fk",
           "tableFrom": "recording",
           "tableTo": "call",
+          "schemaTo": "agents",
           "columnsFrom": [
             "call_id"
           ],
@@ -1180,9 +1195,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.schedule_block": {
+    "agents.schedule_block": {
       "name": "schedule_block",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -1212,7 +1227,7 @@
         "source": {
           "name": "source",
           "type": "schedule_block_source",
-          "typeSchema": "public",
+          "typeSchema": "agents",
           "primaryKey": false,
           "notNull": true
         },
@@ -1277,6 +1292,7 @@
           "name": "schedule_block_technician_id_technician_id_fk",
           "tableFrom": "schedule_block",
           "tableTo": "technician",
+          "schemaTo": "agents",
           "columnsFrom": [
             "technician_id"
           ],
@@ -1293,9 +1309,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.script_version": {
+    "agents.script_version": {
       "name": "script_version",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -1353,9 +1369,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.service_address": {
+    "agents.service_address": {
       "name": "service_address",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -1439,6 +1455,7 @@
           "name": "service_address_account_id_account_id_fk",
           "tableFrom": "service_address",
           "tableTo": "account",
+          "schemaTo": "agents",
           "columnsFrom": [
             "account_id"
           ],
@@ -1455,9 +1472,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.suppression": {
+    "agents.suppression": {
       "name": "suppression",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -1498,6 +1515,7 @@
           "name": "suppression_source_call_id_call_id_fk",
           "tableFrom": "suppression",
           "tableTo": "call",
+          "schemaTo": "agents",
           "columnsFrom": [
             "source_call_id"
           ],
@@ -1522,9 +1540,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.technician": {
+    "agents.technician": {
       "name": "technician",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -1601,9 +1619,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.transcript": {
+    "agents.transcript": {
       "name": "transcript",
-      "schema": "",
+      "schema": "agents",
       "columns": {
         "id": {
           "name": "id",
@@ -1652,6 +1670,7 @@
           "name": "transcript_call_id_call_id_fk",
           "tableFrom": "transcript",
           "tableTo": "call",
+          "schemaTo": "agents",
           "columnsFrom": [
             "call_id"
           ],
@@ -1670,17 +1689,17 @@
     }
   },
   "enums": {
-    "public.account_type": {
+    "agents.account_type": {
       "name": "account_type",
-      "schema": "public",
+      "schema": "agents",
       "values": [
         "property_mgr",
         "homeowner"
       ]
     },
-    "public.booking_status": {
+    "agents.booking_status": {
       "name": "booking_status",
-      "schema": "public",
+      "schema": "agents",
       "values": [
         "pending_review",
         "approved",
@@ -1689,9 +1708,9 @@
         "failed"
       ]
     },
-    "public.call_task_status": {
+    "agents.call_task_status": {
       "name": "call_task_status",
-      "schema": "public",
+      "schema": "agents",
       "values": [
         "queued",
         "claimed",
@@ -1700,9 +1719,9 @@
         "done"
       ]
     },
-    "public.campaign_status": {
+    "agents.campaign_status": {
       "name": "campaign_status",
-      "schema": "public",
+      "schema": "agents",
       "values": [
         "draft",
         "active",
@@ -1710,17 +1729,17 @@
         "completed"
       ]
     },
-    "public.consent_event_type": {
+    "agents.consent_event_type": {
       "name": "consent_event_type",
-      "schema": "public",
+      "schema": "agents",
       "values": [
         "grant",
         "revoke"
       ]
     },
-    "public.disposition": {
+    "agents.disposition": {
       "name": "disposition",
-      "schema": "public",
+      "schema": "agents",
       "values": [
         "dry_run",
         "booked",
@@ -1734,9 +1753,9 @@
         "wrong_number"
       ]
     },
-    "public.gate_result": {
+    "agents.gate_result": {
       "name": "gate_result",
-      "schema": "public",
+      "schema": "agents",
       "values": [
         "pass",
         "surface",
@@ -1747,9 +1766,9 @@
         "attempts"
       ]
     },
-    "public.line_type": {
+    "agents.line_type": {
       "name": "line_type",
-      "schema": "public",
+      "schema": "agents",
       "values": [
         "wireless",
         "landline",
@@ -1757,9 +1776,9 @@
         "unknown"
       ]
     },
-    "public.schedule_block_source": {
+    "agents.schedule_block_source": {
       "name": "schedule_block_source",
-      "schema": "public",
+      "schema": "agents",
       "values": [
         "hcp_job",
         "pto",
@@ -1767,7 +1786,9 @@
       ]
     }
   },
-  "schemas": {},
+  "schemas": {
+    "agents": "agents"
+  },
   "sequences": {},
   "roles": {},
   "policies": {},

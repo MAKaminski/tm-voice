@@ -37,7 +37,9 @@ describe("schema invariants", () => {
   });
   it("recording.retain_until must be >= 5 years", async () => {
     const [c] = await t.db.insert(s.call).values({ callTaskId: r.tasks[0]!.id, disposition: "dry_run" }).returning();
-    await rejectsWith(t.db.insert(s.recording).values({ callId: c!.id, r2Key: "x", retainUntil: "2027-01-01" }), /recording_retain_5y/);
-    await expect(t.db.insert(s.recording).values({ callId: c!.id, r2Key: "x", retainUntil: "2031-09-09" })).resolves.toBeDefined();
+    // Relative to the clock: the constraint compares against created_at, so fixed dates rot.
+    const plusYears = (y: number, d = 0) => { const x = new Date(); x.setUTCFullYear(x.getUTCFullYear() + y); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
+    await rejectsWith(t.db.insert(s.recording).values({ callId: c!.id, r2Key: "x", retainUntil: plusYears(5, -2) }), /recording_retain_5y/);
+    await expect(t.db.insert(s.recording).values({ callId: c!.id, r2Key: "x", retainUntil: plusYears(5, 2) })).resolves.toBeDefined();
   });
 });

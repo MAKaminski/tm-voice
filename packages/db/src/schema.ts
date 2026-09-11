@@ -4,26 +4,32 @@
  */
 import { sql } from "drizzle-orm";
 import {
-  boolean, date, index, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid,
+  boolean, date, index, integer, jsonb, numeric, pgSchema, text, timestamp, uniqueIndex, uuid,
 } from "drizzle-orm/pg-core";
 
 const id = () => uuid("id").primaryKey().defaultRandom();
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
 
-export const accountType = pgEnum("account_type", ["property_mgr", "homeowner"]);
-export const lineType = pgEnum("line_type", ["wireless", "landline", "voip", "unknown"]);
-export const campaignStatus = pgEnum("campaign_status", ["draft", "active", "paused", "completed"]);
-export const callTaskStatus = pgEnum("call_task_status", ["queued", "claimed", "dialed", "blocked", "done"]);
-export const gateResult = pgEnum("gate_result", ["pass", "surface", "suppressed", "dnc", "window", "did_cap", "attempts"]);
-export const disposition = pgEnum("disposition", [
+/**
+ * All agent-owned tables live in the "agents" schema, never in public or ops.
+ * drizzle.config.ts pins schemaFilter to ["agents"] so no migration can ever reach the CRM tables.
+ */
+export const agents = pgSchema("agents");
+
+export const accountType = agents.enum("account_type", ["property_mgr", "homeowner"]);
+export const lineType = agents.enum("line_type", ["wireless", "landline", "voip", "unknown"]);
+export const campaignStatus = agents.enum("campaign_status", ["draft", "active", "paused", "completed"]);
+export const callTaskStatus = agents.enum("call_task_status", ["queued", "claimed", "dialed", "blocked", "done"]);
+export const gateResult = agents.enum("gate_result", ["pass", "surface", "suppressed", "dnc", "window", "did_cap", "attempts"]);
+export const disposition = agents.enum("disposition", [
   "dry_run", "booked", "callback", "not_interested", "opt_out", "voicemail", "no_answer", "busy", "failed", "wrong_number",
 ]);
-export const consentEventType = pgEnum("consent_event_type", ["grant", "revoke"]);
-export const bookingStatus = pgEnum("booking_status", ["pending_review", "approved", "rejected", "synced", "failed"]);
-export const scheduleBlockSource = pgEnum("schedule_block_source", ["hcp_job", "pto", "window"]);
+export const consentEventType = agents.enum("consent_event_type", ["grant", "revoke"]);
+export const bookingStatus = agents.enum("booking_status", ["pending_review", "approved", "rejected", "synced", "failed"]);
+export const scheduleBlockSource = agents.enum("schedule_block_source", ["hcp_job", "pto", "window"]);
 
-export const account = pgTable("account", {
+export const account = agents.table("account", {
   id: id(),
   name: text("name").notNull(),
   type: accountType("type").notNull().default("property_mgr"),
@@ -33,7 +39,7 @@ export const account = pgTable("account", {
   updatedAt: updatedAt(),
 });
 
-export const contact = pgTable(
+export const contact = agents.table(
   "contact",
   {
     id: id(),
@@ -56,7 +62,7 @@ export const contact = pgTable(
   (t) => [index("contact_phone_idx").on(t.phoneE164), uniqueIndex("contact_booking_token_uq").on(t.bookingToken)],
 );
 
-export const serviceAddress = pgTable("service_address", {
+export const serviceAddress = agents.table("service_address", {
   id: id(),
   accountId: uuid("account_id").notNull().references(() => account.id),
   line1: text("line1").notNull(),
@@ -71,7 +77,7 @@ export const serviceAddress = pgTable("service_address", {
   updatedAt: updatedAt(),
 });
 
-export const scriptVersion = pgTable("script_version", {
+export const scriptVersion = agents.table("script_version", {
   id: id(),
   name: text("name").notNull(),
   disclosureLine: text("disclosure_line").notNull(),
@@ -81,7 +87,7 @@ export const scriptVersion = pgTable("script_version", {
   updatedAt: updatedAt(),
 });
 
-export const campaign = pgTable("campaign", {
+export const campaign = agents.table("campaign", {
   id: id(),
   name: text("name").notNull(),
   scriptVersionId: uuid("script_version_id").notNull().references(() => scriptVersion.id),
@@ -93,7 +99,7 @@ export const campaign = pgTable("campaign", {
   updatedAt: updatedAt(),
 });
 
-export const callTask = pgTable(
+export const callTask = agents.table(
   "call_task",
   {
     id: id(),
@@ -110,7 +116,7 @@ export const callTask = pgTable(
   (t) => [index("call_task_claim_idx").on(t.campaignId, t.earliestDialAt).where(sql`status = 'queued'`)],
 );
 
-export const did = pgTable("did", {
+export const did = agents.table("did", {
   id: id(),
   phoneE164: text("phone_e164").notNull().unique(),
   attestation: text("attestation").notNull().default("A"),
@@ -122,7 +128,7 @@ export const did = pgTable("did", {
   updatedAt: updatedAt(),
 });
 
-export const call = pgTable("call", {
+export const call = agents.table("call", {
   id: id(),
   callTaskId: uuid("call_task_id").notNull().references(() => callTask.id),
   didId: uuid("did_id").references(() => did.id),
@@ -138,7 +144,7 @@ export const call = pgTable("call", {
   updatedAt: updatedAt(),
 });
 
-export const recording = pgTable("recording", {
+export const recording = agents.table("recording", {
   id: id(),
   callId: uuid("call_id").notNull().references(() => call.id),
   r2Key: text("r2_key").notNull(),
@@ -149,7 +155,7 @@ export const recording = pgTable("recording", {
   updatedAt: updatedAt(),
 });
 
-export const transcript = pgTable("transcript", {
+export const transcript = agents.table("transcript", {
   id: id(),
   callId: uuid("call_id").notNull().references(() => call.id),
   turns: jsonb("turns").notNull().default([]),
@@ -159,7 +165,7 @@ export const transcript = pgTable("transcript", {
 });
 
 /** Append-only: a DB trigger (migrations/0001_consent_immutable.sql) rejects UPDATE and DELETE. */
-export const consentEvent = pgTable(
+export const consentEvent = agents.table(
   "consent_event",
   {
     id: id(),
@@ -175,7 +181,7 @@ export const consentEvent = pgTable(
 );
 
 /** Keys on phone number, never on contact. */
-export const suppression = pgTable("suppression", {
+export const suppression = agents.table("suppression", {
   id: id(),
   phoneE164: text("phone_e164").notNull().unique(),
   reason: text("reason").notNull(),
@@ -183,7 +189,7 @@ export const suppression = pgTable("suppression", {
   createdAt: createdAt(),
 });
 
-export const technician = pgTable("technician", {
+export const technician = agents.table("technician", {
   id: id(),
   name: text("name").notNull(),
   hcpEmployeeId: text("hcp_employee_id"),
@@ -196,7 +202,7 @@ export const technician = pgTable("technician", {
   updatedAt: updatedAt(),
 });
 
-export const scheduleBlock = pgTable(
+export const scheduleBlock = agents.table(
   "schedule_block",
   {
     id: id(),
@@ -213,7 +219,7 @@ export const scheduleBlock = pgTable(
   (t) => [index("schedule_block_tech_start_idx").on(t.technicianId, t.startAt)],
 );
 
-export const booking = pgTable(
+export const booking = agents.table(
   "booking",
   {
     id: id(),
@@ -234,7 +240,7 @@ export const booking = pgTable(
   (t) => [uniqueIndex("booking_idempotency_uq").on(t.idempotencyKey)],
 );
 
-export const calendarInvite = pgTable("calendar_invite", {
+export const calendarInvite = agents.table("calendar_invite", {
   id: id(),
   bookingId: uuid("booking_id").notNull().references(() => booking.id),
   graphEventId: text("graph_event_id"),
@@ -243,7 +249,7 @@ export const calendarInvite = pgTable("calendar_invite", {
   updatedAt: updatedAt(),
 });
 
-export const emailSend = pgTable(
+export const emailSend = agents.table(
   "email_send",
   {
     id: id(),

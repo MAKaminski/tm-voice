@@ -1,0 +1,13 @@
+flowchart TB
+    subgraph frontend["Front-end · user interface"]
+        _tm_adapters["@tm/adapters"]
+        _tm_api["@tm/api"]
+        _tm_compliance["@tm/compliance"]
+        _tm_console["@tm/console"]
+        _tm_shared["@tm/shared"]
+        _tm_worker["@tm/worker"]
+        tm_voice["tm-voice"]
+    end
+    subgraph backend["Back-end · database"]
+        _tm_db["@tm/db"]
+    end

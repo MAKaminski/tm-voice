@@ -1,18 +1,21 @@
-# Repo map — TransparentOutbound   (none, 2026-09-09T00:21:59Z)
+# Repo map — TransparentOutbound   (6099651, 2026-09-11T12:37:53Z)
 
 Read this once. Then `grep` `.claude/index/symbols.tsv` for exact symbols —
-`name<TAB>kind<TAB>path:line`, 140 entries. Do not read symbols.tsv whole.
+`name<TAB>kind<TAB>path:line`, 189 entries. Do not read symbols.tsv whole.
 
 ## Layers
 
 | Layer | Where | Files |
 |---|---|---|
-| Front-end |  | 0 |
+| Front-end |  | 7 |
 | Back-end |  | 2 |
 | Middleware |  | 0 |
-| Infrastructure |  | 2 |
+| Infrastructure | docker-compose.yml  | 7 |
 
 ## Entry points
+- `./apps/worker/src/main.ts`
+- `./apps/api/src/index.ts`
+- `./apps/api/src/availability/index.ts`
 - `./packages/db/src/index.ts`
 - `./packages/adapters/src/r2/index.ts`
 - `./packages/adapters/src/resend/index.ts`
@@ -34,6 +37,7 @@ Read this once. Then `grep` `.claude/index/symbols.tsv` for exact symbols —
 - npm run db:seed
 - npm run dev
 - npm run erd:check
+- npm run erd:write
 - npm run lint
 - npm run replay
 - npm run test
