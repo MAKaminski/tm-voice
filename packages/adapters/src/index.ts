@@ -32,6 +32,14 @@ export function createAdapters(cfg: Config) {
 }
 export type Adapters = ReturnType<typeof createAdapters>;
 
+/**
+ * Vendors still answering with fixtures. Outside dry_run only the dial-path keys are required, so
+ * this is how a half-configured deploy stays visible instead of quietly serving mock availability.
+ */
+export function mockedVendors(adapters: Adapters): string[] {
+  return Object.values(adapters).filter((a) => a.mode === "mock").map((a) => a.name);
+}
+
 export async function healthcheckAll(adapters: Adapters) {
   return Promise.all(Object.values(adapters).map((a) => a.healthcheck().catch((e: Error) => ({ vendor: a.name, ok: false, mode: a.mode, detail: e.message }))));
 }

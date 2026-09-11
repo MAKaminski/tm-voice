@@ -55,6 +55,8 @@ export const contact = agents.table(
     dncFederal: boolean("dnc_federal").notNull().default(false),
     dncState: boolean("dnc_state").notNull().default(false),
     dncCheckedAt: timestamp("dnc_checked_at", { withTimezone: true }),
+    /** Last Telnyx carrier lookup. Null means line_type has never been verified, only defaulted. */
+    lineTypeCheckedAt: timestamp("line_type_checked_at", { withTimezone: true }),
     bookingToken: text("booking_token").notNull().default(sql`gen_random_uuid()::text`),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -113,7 +115,12 @@ export const callTask = agents.table(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("call_task_claim_idx").on(t.campaignId, t.earliestDialAt).where(sql`status = 'queued'`)],
+  (t) => [
+    index("call_task_claim_idx").on(t.campaignId, t.earliestDialAt).where(sql`status = 'queued'`),
+    // One task per contact per campaign: re-attempts increment attempt_no on the same row rather
+    // than inserting another. Lets campaign ingestion re-run idempotently with onConflictDoNothing.
+    uniqueIndex("call_task_campaign_contact_uq").on(t.campaignId, t.contactId),
+  ],
 );
 
 export const did = agents.table("did", {

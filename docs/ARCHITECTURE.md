@@ -8,10 +8,10 @@ Autonomous outbound voice agent for Transparent Maintenance. Companion to `docs/
 |---|---|---|---|
 | Front-end | Campaign console (dashboard, review queue, live board) | `apps/console` (Next.js 15) | dashboard read-only; review/live are placeholders (Phases 4/6) |
 | Front-end | Self-schedule booking page `/book/[token]` | `apps/console/app/book` | **built** — uses availability service, writes `booking` |
-| Middleware | Tool API for the agent (`/tools/*`), booking API, webhooks, health | `apps/api` (Hono) | `opt_out` built; other tools 501 until Phase 4 |
+| Middleware | Tool API for the agent (`/tools/*`), booking API, webhooks, health | `apps/api` (Hono) | `opt_out`, `get_availability`, `book_job` **built**; `send_packet` 501 until Phase 4 |
 | Middleware | Availability service (materializer + slot query + Redis cache) | `apps/api/src/availability` | **built** |
-| Middleware | Dial orchestrator, post-call pipeline, retention sweeper, schedulers | `apps/worker` (BullMQ) | dial.claim in dry_run built; postcall/hcp/graph/resend/apollo are stubs |
-| Middleware | Pre-dial gate, suppression, consent ledger, calling windows, disclosure | `packages/compliance` | **built** |
+| Middleware | Dial orchestrator, campaign ingestion, post-call pipeline, retention sweeper, schedulers | `apps/worker` (BullMQ) | dial.claim, `apollo.syncCampaign` and `dial.requeue` **built**; postcall and the hcp/graph/resend fulfillment handlers are stubs |
+| Middleware | Pre-dial gate (incl. line_type enrichment), suppression, consent ledger, calling windows, disclosure | `packages/compliance` | **built** |
 | Middleware | Vendor adapters (apollo, hcp, graph, resend, telnyx, vapi, r2, dnc) | `packages/adapters` | mocks built; real clients built for 7 of 8 — **hcp real client is blocked** (see below) |
 | Middleware | Config loader, logger, errors, job envelope | `packages/shared` | **built** |
 | Back-end | Postgres schema, migrations, seed | `packages/db` (Drizzle) | **built**, 17 tables |
@@ -31,6 +31,8 @@ Autonomous outbound voice agent for Transparent Maintenance. Companion to `docs/
 | Gate-then-act | `gateAndClaim()` writes `gate_result` in the claiming transaction; only `pass` reaches an adapter | dial orchestrator |
 | Materialize + invalidate | pull vendor state into a table on a schedule + webhook; serve from Redis with TTL | schedule_block / slots |
 | Token-per-contact public page | `contact.booking_token` → `/book/:token` | booking page |
+| One booking write path | `createBooking()` in `apps/api/src/booking-core.ts`, idempotent on (contact, window_start) | `/book/:token` and the agent's `book_job` tool |
+| Stateless slot handle | `slot_id` = short hash of (technician, window_start); `book_job` recomputes slots and matches, so a stale id simply stops matching | `get_availability` → `book_job` |
 | Idempotent write | unique `idempotency_key` column + `onConflictDoNothing` | booking, email_send |
 
 Before adding a component or pattern, extend one of these. Two components solving the same problem differently is a finding.
@@ -60,6 +62,15 @@ Each adapter selects its mock when `DIAL_MODE=dry_run` or any of its keys is abs
 | dnc | `GET /api/v1/check-1/` | DoNotCallDNC developer docs | US-only: a non-`+1` number is refused rather than reported clean, and an inconclusive body raises. The vendor returns **only a federal determination**, so `state` is always false and state-level scrubbing is an open compliance gap |
 | r2 | S3 `PutObject` / `GetObject` presign / `DeleteObject` | AWS S3 SDK | The only client not using `request()`; it needs SigV4, so it uses `@aws-sdk/client-s3` (permitted by rule 1 inside `packages/adapters/<vendor>`) pinned to the fetch handler. Presigned URLs cap at 7 days |
 | **hcp** | **not implemented** | — | `docs.housecallpro.com` renders client-side and publishes no fetchable OpenAPI document, so the auth scheme (`Bearer` vs `Token`), the `/jobs` scheduled-date filters, the list envelope and pagination, whether an arrival-window endpoint exists, and the webhook signing scheme are all unverified. Rather than put guessed endpoints on the path that materializes availability and writes jobs back, the five methods raise `not_implemented` with that reason. Resolve alongside RUNBOOK §0 check 1 (whether the MAX plan can mint a key at all); the mock keeps availability running meanwhile |
+
+## What a live call needs
+
+Leaving `dry_run` requires only `DIAL_PATH_VENDOR_KEYS` (both Telnyx, Vapi and DNC sets) rather than all 25 vendor keys — a first test call should not depend on Graph certificates or a Resend domain. Every other vendor stays mocked, is reported `mode:"mock"` by `/health`, and is named in a boot warning from both api and worker. All three Telnyx keys are required together because the adapter only goes real with the full set and its mock resolves most numbers to `landline`, so a partial Telnyx config would fail *open*.
+
+Two things gate a dial regardless of keys, and both are easy to miss:
+
+- `contact.line_type` defaults to `unknown`, which `landline_only` refuses. `gateAndClaim` resolves it through the Telnyx carrier lookup and caches it on the contact for 90 days, mirroring the DNC cache beside it. A lookup failure rolls the transaction back and leaves the task `queued` rather than writing it off as blocked.
+- A `call_task` has to exist. `apollo.syncCampaign` creates them from a campaign's saved search — one task per (campaign, contact), enforced by a unique index, so re-runs are idempotent and re-attempts increment `attempt_no` on the same row.
 
 ## Call flow
 

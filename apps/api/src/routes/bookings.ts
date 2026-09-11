@@ -2,8 +2,9 @@ import { and, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { booking, campaign, contact, serviceAddress, technician } from "@tm/db";
-import { idempotencyKey } from "@tm/shared";
+
 import type { AppEnv } from "../app.js";
+import { createBooking, enqueueFulfillment } from "../booking-core.js";
 import { internalAuth } from "../middleware.js";
 
 const bookBody = z.object({
@@ -43,15 +44,12 @@ export function bookingRoutes() {
     const still = slots.find((s) => s.window_start === windowStart.toISOString() && s.technician_id === p.data.technician_id);
     if (!still) return c.json({ error: "slot_unavailable" }, 409);
 
-    const key = idempotencyKey("booking", ct.id, windowStart.toISOString());
-    const [row] = await db.insert(booking).values({
-      contactId: ct.id, technicianId: p.data.technician_id, serviceAddressId: p.data.service_address_id, windowStart,
-      arrivalWindowMin: p.data.arrival_window_min, status: cfg.AUTO_BOOK ? "approved" : "pending_review", idempotencyKey: key,
-    }).onConflictDoNothing({ target: booking.idempotencyKey }).returning();
-    const saved = row ?? (await db.select().from(booking).where(eq(booking.idempotencyKey, key)))[0]!;
-    if (row && cfg.AUTO_BOOK) await enqueueFulfillment(producer, saved.id);
+    const { booking: saved, created } = await createBooking(db, cfg, producer, {
+      contactId: ct.id, technicianId: p.data.technician_id, serviceAddressId: p.data.service_address_id,
+      windowStart, arrivalWindowMin: p.data.arrival_window_min,
+    });
     await c.get("availability").invalidate();
-    return c.json({ booking: saved }, row ? 201 : 200);
+    return c.json({ booking: saved }, created ? 201 : 200);
   });
 
   app.get("/bookings", internalAuth, async (c) => {
@@ -79,14 +77,4 @@ export function bookingRoutes() {
     return c.json({ campaigns: await db.select().from(campaign).orderBy(desc(campaign.createdAt)) });
   });
   return app;
-}
-
-/** Approval fans out to the three fulfillment queues. Handlers are Phase 3/4 stubs; the envelope contract is fixed now. */
-async function enqueueFulfillment(producer: AppEnv["Variables"]["deps"]["producer"], bookingId: string) {
-  const now = new Date().toISOString();
-  await Promise.all([
-    producer.enqueue("hcp", "createJob", { entity_id: bookingId, idempotency_key: idempotencyKey("hcp", "createJob", bookingId), attempt: 0, enqueued_at: now }),
-    producer.enqueue("graph", "createEvent", { entity_id: bookingId, idempotency_key: idempotencyKey("graph", "createEvent", bookingId), attempt: 0, enqueued_at: now }),
-    producer.enqueue("resend", "sendPacket", { entity_id: bookingId, idempotency_key: idempotencyKey("resend", "sendPacket", bookingId), attempt: 0, enqueued_at: now }),
-  ]);
 }

@@ -6,6 +6,7 @@ import type { AnyDb } from "@tm/db";
 import type { Config } from "@tm/shared";
 import { AvailabilityService } from "./availability/index.js";
 import type { Producer } from "./queue.js";
+import { ToolIdempotency } from "./tool-idempotency.js";
 import { availabilityRoutes } from "./routes/availability.js";
 import { bookingRoutes } from "./routes/bookings.js";
 import { healthRoutes } from "./routes/health.js";
@@ -19,13 +20,14 @@ export interface AppDeps {
   producer: Producer;
   redis?: Redis;
 }
-export type AppEnv = { Variables: { deps: AppDeps; availability: AvailabilityService } };
+export type AppEnv = { Variables: { deps: AppDeps; availability: AvailabilityService; toolIdem: ToolIdempotency } };
 
 export function createApp(deps: AppDeps) {
   const availability = new AvailabilityService(deps.db, deps.redis);
+  const toolIdem = new ToolIdempotency(deps.redis);
   const app = new Hono<AppEnv>();
   if (deps.cfg.NODE_ENV !== "test") app.use(honoLogger());
-  app.use(async (c, next) => { c.set("deps", deps); c.set("availability", availability); await next(); });
+  app.use(async (c, next) => { c.set("deps", deps); c.set("availability", availability); c.set("toolIdem", toolIdem); await next(); });
 
   app.route("/health", healthRoutes());
   app.route("/availability", availabilityRoutes());

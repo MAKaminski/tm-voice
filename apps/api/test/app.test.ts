@@ -70,7 +70,10 @@ describe("api", () => {
     expect((await json(res)).results[0].result).toMatch(/end the call/);
     const [s] = await t.db.select().from(suppression).where(eq(suppression.phoneE164, SEED.phones.landlineGa));
     expect(s).toBeDefined();
-    expect((await app.request("/tools/book_job", { method: "POST", body: "{}", headers: { "x-vapi-secret": "mock-vapi-secret" } })).status).toBe(501);
+    // send_packet is the one tool still waiting on Phase 4 fulfillment; book_job is implemented
+    // and rejects a malformed Vapi envelope rather than 501-ing.
+    expect((await app.request("/tools/send_packet", { method: "POST", body: "{}", headers: { "x-vapi-secret": "mock-vapi-secret" } })).status).toBe(501);
+    expect((await app.request("/tools/book_job", { method: "POST", body: "{}", headers: { "x-vapi-secret": "mock-vapi-secret" } })).status).toBe(400);
   });
   it("POST /webhooks/hcp enqueues a materialize job", async () => {
     const res = await app.request("/webhooks/hcp", { method: "POST", body: JSON.stringify({ event: "job.scheduled", id: "job_x" }) });

@@ -1,5 +1,5 @@
 import { Queue, Worker } from "bullmq";
-import { createAdapters } from "@tm/adapters";
+import { createAdapters, mockedVendors } from "@tm/adapters";
 import { createProducer, createRedis } from "@tm/api";
 import { createDb } from "@tm/db";
 import { DLQ_NAME, QUEUES, RETRY_POLICY, getConfig, jobEnvelopeSchema, logger } from "@tm/shared";
@@ -10,7 +10,13 @@ const cfg = getConfig();
 if (!cfg.REDIS_URL) throw new Error("worker requires REDIS_URL (BullMQ). For dry runs without Redis, use the api's inline producer.");
 const connection = createRedis(cfg.REDIS_URL);
 const { db } = createDb(cfg.DATABASE_URL);
-const ctx: Ctx = { cfg, db, adapters: createAdapters(cfg), producer: createProducer(cfg.REDIS_URL) };
+const adapters = createAdapters(cfg);
+const ctx: Ctx = { cfg, db, adapters, producer: createProducer(cfg.REDIS_URL) };
+// A vendor left on fixtures outside dry_run is a configuration gap, not a mode. Say so loudly.
+if (cfg.DIAL_MODE !== "dry_run") {
+  const mocked = mockedVendors(adapters);
+  if (mocked.length) logger.warn({ dial_mode: cfg.DIAL_MODE, mocked }, "vendors still answering with mock fixtures outside dry_run");
+}
 const dlq = new Queue(DLQ_NAME, { connection });
 
 const workers = QUEUES.map((q) => {

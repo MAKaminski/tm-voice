@@ -65,6 +65,7 @@ contact
   dnc_federal  boolean  [NOT NULL]
   dnc_state  boolean  [NOT NULL]
   dnc_checked_at  timestamp with time zone
+  line_type_checked_at  timestamp with time zone
   booking_token  text  [UK NOT NULL]
   created_at  timestamp with time zone  [NOT NULL]
   updated_at  timestamp with time zone  [NOT NULL]
@@ -101,8 +102,8 @@ campaign
   updated_at  timestamp with time zone  [NOT NULL]
 call_task
   id  uuid  [PK]
-  campaign_id  uuid  [FK->campaign.id NOT NULL]
-  contact_id  uuid  [FK->contact.id NOT NULL]
+  campaign_id  uuid  [FK->campaign.id UK NOT NULL]
+  contact_id  uuid  [FK->contact.id UK NOT NULL]
   earliest_dial_at  timestamp with time zone  [NOT NULL]
   attempt_no  integer  [NOT NULL]
   status  call_task_status  [NOT NULL]

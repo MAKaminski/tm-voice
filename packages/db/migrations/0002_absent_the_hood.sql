@@ -1,0 +1,2 @@
+ALTER TABLE "agents"."contact" ADD COLUMN "line_type_checked_at" timestamp with time zone;--> statement-breakpoint
+CREATE UNIQUE INDEX "call_task_campaign_contact_uq" ON "agents"."call_task" USING btree ("campaign_id","contact_id");
