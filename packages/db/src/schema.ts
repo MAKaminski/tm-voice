@@ -199,6 +199,8 @@ export const suppression = agents.table("suppression", {
 export const technician = agents.table("technician", {
   id: id(),
   name: text("name").notNull(),
+  /** Needed to invite them to the booking's calendar event; HCP employees carry one. */
+  email: text("email"),
   hcpEmployeeId: text("hcp_employee_id"),
   maxJobsPerDay: integer("max_jobs_per_day").notNull().default(2),
   maxMilesBetweenJobs: integer("max_miles_between_jobs").notNull().default(50),

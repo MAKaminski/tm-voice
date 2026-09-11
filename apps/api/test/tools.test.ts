@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAdapters } from "@tm/adapters";
-import { SEED, booking, call, callTask, contact, seed } from "@tm/db";
+import { SEED, booking, call, callTask, contact, seed, serviceAddress, technician } from "@tm/db";
 import { createTestDb } from "@tm/db/test";
 import { loadConfig } from "@tm/shared";
 import { createApp } from "../src/app.js";
@@ -151,5 +151,41 @@ describe("POST /tools/opt_out", () => {
     const res = await post("/tools/opt_out", msg("opt_out", { phone_e164: "nope" }, { customer: { number: "bad" } }));
     expect(res.status).toBe(200);
     expect((await json(res)).results[0].error).toMatch(/call them back/);
+  });
+});
+
+describe("POST /tools/send_packet", () => {
+  it("tells the caller their details are still being confirmed when nothing is approved", async () => {
+    await t.db.update(contact).set({ email: "dana@pm.co" }).where(eq(contact.phoneE164, SEED.phones.landlineGa));
+    const res = await post("/tools/send_packet", msg("send_packet", {}, { id: "vapi_sp_1" }));
+    const result = (await json(res)).results[0].result;
+    expect(result.sent).toBe(false);
+    expect(result.reason).toBe("no_approved_booking");
+    expect(result.say).toMatch(/still being confirmed/);
+  });
+
+  it("queues the packet once a booking is approved", async () => {
+    const [c] = await t.db.select().from(contact).where(eq(contact.phoneE164, SEED.phones.landlineGa));
+    const [tech] = await t.db.select().from(technician).orderBy(technician.name).limit(1);
+    const [addr] = await t.db.select().from(serviceAddress).orderBy(serviceAddress.line1).limit(1);
+    await t.db.insert(booking).values({
+      contactId: c!.id, technicianId: tech!.id, serviceAddressId: addr!.id,
+      windowStart: new Date("2026-09-22T14:00:00Z"), status: "approved", idempotencyKey: "booking:sp:1",
+    });
+    const res = await post("/tools/send_packet", msg("send_packet", {}, { id: "vapi_sp_2" }));
+    const result = (await json(res)).results[0].result;
+    expect(result.sent).toBe(true);
+    expect(result.say).toContain("dana@pm.co");
+    expect(enqueued).toContain("resend.sendPacket");
+  });
+
+  it("does not promise an email it cannot send", async () => {
+    const [c] = await t.db.select().from(contact).where(eq(contact.phoneE164, SEED.phones.landlineGa));
+    await t.db.update(contact).set({ email: null }).where(eq(contact.id, c!.id));
+    const res = await post("/tools/send_packet", msg("send_packet", {}, { id: "vapi_sp_3" }));
+    const result = (await json(res)).results[0].result;
+    expect(result.sent).toBe(false);
+    expect(result.reason).toBe("no_email");
+    expect(result.say).toMatch(/office follow up/);
   });
 });

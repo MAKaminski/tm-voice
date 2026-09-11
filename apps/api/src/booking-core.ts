@@ -24,6 +24,16 @@ export async function enqueueFulfillment(producer: Producer, bookingId: string):
   ]);
 }
 
+/** Queues just the customer email, for the agent's send_packet tool. */
+export async function enqueuePacket(producer: Producer, bookingId: string): Promise<void> {
+  await producer.enqueue("resend", "sendPacket", {
+    entity_id: bookingId,
+    idempotency_key: idempotencyKey("resend", "sendPacket", bookingId),
+    attempt: 0,
+    enqueued_at: new Date().toISOString(),
+  });
+}
+
 export interface CreateBookingInput {
   contactId: string;
   technicianId: string;

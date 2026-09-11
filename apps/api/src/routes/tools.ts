@@ -1,11 +1,11 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { suppress } from "@tm/compliance";
-import { type AnyDb, call, callTask, contact, serviceAddress } from "@tm/db";
+import { type AnyDb, booking, call, callTask, contact, serviceAddress } from "@tm/db";
 import { logger } from "@tm/shared";
 import type { AppEnv } from "../app.js";
-import { createBooking, slotId } from "../booking-core.js";
+import { createBooking, enqueuePacket, slotId } from "../booking-core.js";
 import { toolIdempotencyKey } from "../tool-idempotency.js";
 import { vapiAuth } from "../middleware.js";
 
@@ -87,8 +87,6 @@ const MAX_OPTIONS = 3;
 export function toolRoutes() {
   const app = new Hono<AppEnv>().use(vapiAuth);
 
-  /** send_packet still needs the resend fulfillment processor (Phase 4). */
-  app.post("/send_packet", (c) => c.json({ error: "not_implemented", tool: "send_packet", phase: 4 }, 501));
 
   /** Shared shape: parse, verify, then run `handle` once per tool call with idempotency. */
   const toolHandler = (
@@ -177,6 +175,28 @@ export function toolRoutes() {
       // AUTO_BOOK is false by design, so never promise a confirmed appointment on the call.
       say: `You're down for ${when.day} between ${when.window}. You'll get an email confirming it once our office checks the technician's route.`,
     };
+  }));
+
+  app.post("/send_packet", toolHandler("send_packet", async (c, msg) => {
+    const { db, producer } = c.get("deps");
+    const ctx = await resolveCallContext(db, msg);
+    if ("error" in ctx) return { sent: false, say: "I can't find your account on file. Someone from our office will follow up." };
+    if (!ctx.contact.email) {
+      // Asking for the address on the phone is a Phase 6 conversation; for now, say so plainly.
+      return { sent: false, reason: "no_email", say: "I don't have an email address on file for you, so I'll have our office follow up instead." };
+    }
+
+    // The packet describes a specific visit, so there has to be one.
+    const [b] = await db.select().from(booking)
+      .where(and(eq(booking.contactId, ctx.contact.id), eq(booking.status, "approved")))
+      .orderBy(desc(booking.createdAt)).limit(1);
+    if (!b) {
+      return { sent: false, reason: "no_approved_booking", say: "Your appointment is still being confirmed by our office — the details will be emailed as soon as it is." };
+    }
+
+    await enqueuePacket(producer, b.id);
+    logger.info({ booking_id: b.id, contact_id: ctx.contact.id }, "packet requested from call");
+    return { sent: true, to: ctx.contact.email, say: `I've sent the details to ${ctx.contact.email}.` };
   }));
 
   app.post("/opt_out", toolHandler("opt_out", async (c, msg, args) => {

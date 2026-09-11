@@ -1,0 +1,1 @@
+ALTER TABLE "agents"."technician" ADD COLUMN "email" text;

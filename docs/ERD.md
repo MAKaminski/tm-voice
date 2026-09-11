@@ -169,6 +169,7 @@ suppression
 technician
   id  uuid  [PK]
   name  text  [NOT NULL]
+  email  text
   hcp_employee_id  text
   max_jobs_per_day  integer  [NOT NULL]
   max_miles_between_jobs  integer  [NOT NULL]

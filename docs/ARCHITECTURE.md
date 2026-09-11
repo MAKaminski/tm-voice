@@ -8,9 +8,9 @@ Autonomous outbound voice agent for Transparent Maintenance. Companion to `docs/
 |---|---|---|---|
 | Front-end | Campaign console (dashboard, review queue, live board) | `apps/console` (Next.js 15) | dashboard read-only; review/live are placeholders (Phases 4/6) |
 | Front-end | Self-schedule booking page `/book/[token]` | `apps/console/app/book` | **built** — uses availability service, writes `booking` |
-| Middleware | Tool API for the agent (`/tools/*`), booking API, webhooks, health | `apps/api` (Hono) | `opt_out`, `get_availability`, `book_job` **built**; `send_packet` 501 until Phase 4 |
+| Middleware | Tool API for the agent (`/tools/*`), booking API, webhooks, health | `apps/api` (Hono) | all four tools **built** — `opt_out`, `get_availability`, `book_job`, `send_packet` |
 | Middleware | Availability service (materializer + slot query + Redis cache) | `apps/api/src/availability` | **built** |
-| Middleware | Dial orchestrator, campaign ingestion, post-call pipeline, retention sweeper, schedulers | `apps/worker` (BullMQ) | dial.claim, `apollo.syncCampaign` and `dial.requeue` **built**; postcall and the hcp/graph/resend fulfillment handlers are stubs |
+| Middleware | Dial orchestrator, campaign ingestion, fulfillment, post-call pipeline, retention sweeper, schedulers | `apps/worker` (BullMQ) | dial.claim, `apollo.syncCampaign`, `dial.requeue` and all three fulfillment handlers **built**; only the postcall pipeline and `apollo.logCall` remain stubs |
 | Middleware | Pre-dial gate (incl. line_type enrichment), suppression, consent ledger, calling windows, disclosure | `packages/compliance` | **built** |
 | Middleware | Vendor adapters (apollo, hcp, graph, resend, telnyx, vapi, r2, dnc) | `packages/adapters` | mocks built; real clients built for 7 of 8 — **hcp real client is blocked** (see below) |
 | Middleware | Config loader, logger, errors, job envelope | `packages/shared` | **built** |
@@ -44,7 +44,7 @@ Before adding a component or pattern, extend one of these. Two components solvin
 | Campaign & dial | worker `dial.tick`/`dial.claim`, compliance gate, telnyx/vapi adapters | campaign, call_task, call, did, script_version |
 | Compliance | compliance package, dnc adapter, `/tools/opt_out` | consent_event, suppression |
 | Availability & booking | api availability service, booking routes, console booking page, hcp adapter | technician, schedule_block, service_address, booking |
-| Fulfillment (Phase 4) | worker hcp/graph/resend stubs, review queue | calendar_invite, email_send |
+| Fulfillment | worker `hcp.createJob` / `graph.createEvent` / `resend.sendPacket`, review queue | calendar_invite, email_send |
 | Post-call (Phase 5) | worker postcall/apollo stubs, r2 adapter | recording, transcript |
 | CRM sync | apollo adapter | account, contact |
 

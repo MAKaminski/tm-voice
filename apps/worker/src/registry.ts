@@ -3,6 +3,7 @@ import type { Processor } from "./context.js";
 import { availabilityInvalidate, availabilityMaterialize } from "./processors/availability.js";
 import { apolloSyncCampaign, dialRequeue } from "./processors/campaign.js";
 import { dialClaim, dialTick } from "./processors/dial.js";
+import { graphCreateEvent, hcpCreateJob, resendSendPacket } from "./processors/fulfillment.js";
 import { retentionSweep } from "./processors/retention.js";
 import { stub } from "./processors/stubs.js";
 
@@ -13,9 +14,9 @@ const p = (x: Processor<never> | Processor) => x as AnyProcessor;
 export const REGISTRY: Record<QueueName, Record<string, AnyProcessor>> = {
   dial: { claim: p(dialClaim as Processor), tick: p(dialTick), requeue: p(dialRequeue as Processor) },
   postcall: { process: p(stub("postcall", 5)) },
-  hcp: { createJob: p(stub("hcp", 4)) },
-  graph: { createEvent: p(stub("graph", 4)) },
-  resend: { sendPacket: p(stub("resend", 4)) },
+  hcp: { createJob: p(hcpCreateJob) },
+  graph: { createEvent: p(graphCreateEvent) },
+  resend: { sendPacket: p(resendSendPacket) },
   apollo: { logCall: p(stub("apollo", 5)), syncCampaign: p(apolloSyncCampaign as Processor) },
   availability: { materialize: p(availabilityMaterialize), invalidate: p(availabilityInvalidate) },
   retention: { sweep: p(retentionSweep) },
