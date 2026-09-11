@@ -37,7 +37,7 @@ export const account = agents.table("account", {
   hcpCustomerId: text("hcp_customer_id"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}).enableRLS();
 
 export const contact = agents.table(
   "contact",
@@ -55,12 +55,14 @@ export const contact = agents.table(
     dncFederal: boolean("dnc_federal").notNull().default(false),
     dncState: boolean("dnc_state").notNull().default(false),
     dncCheckedAt: timestamp("dnc_checked_at", { withTimezone: true }),
+    /** Last Telnyx carrier lookup. Null means line_type has never been verified, only defaulted. */
+    lineTypeCheckedAt: timestamp("line_type_checked_at", { withTimezone: true }),
     bookingToken: text("booking_token").notNull().default(sql`gen_random_uuid()::text`),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [index("contact_phone_idx").on(t.phoneE164), uniqueIndex("contact_booking_token_uq").on(t.bookingToken)],
-);
+).enableRLS();
 
 export const serviceAddress = agents.table("service_address", {
   id: id(),
@@ -75,7 +77,7 @@ export const serviceAddress = agents.table("service_address", {
   hcpAddressId: text("hcp_address_id"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}).enableRLS();
 
 export const scriptVersion = agents.table("script_version", {
   id: id(),
@@ -85,7 +87,7 @@ export const scriptVersion = agents.table("script_version", {
   active: boolean("active").notNull().default(false),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}).enableRLS();
 
 export const campaign = agents.table("campaign", {
   id: id(),
@@ -97,7 +99,7 @@ export const campaign = agents.table("campaign", {
   status: campaignStatus("status").notNull().default("draft"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}).enableRLS();
 
 export const callTask = agents.table(
   "call_task",
@@ -113,8 +115,13 @@ export const callTask = agents.table(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("call_task_claim_idx").on(t.campaignId, t.earliestDialAt).where(sql`status = 'queued'`)],
-);
+  (t) => [
+    index("call_task_claim_idx").on(t.campaignId, t.earliestDialAt).where(sql`status = 'queued'`),
+    // One task per contact per campaign: re-attempts increment attempt_no on the same row rather
+    // than inserting another. Lets campaign ingestion re-run idempotently with onConflictDoNothing.
+    uniqueIndex("call_task_campaign_contact_uq").on(t.campaignId, t.contactId),
+  ],
+).enableRLS();
 
 export const did = agents.table("did", {
   id: id(),
@@ -126,7 +133,7 @@ export const did = agents.table("did", {
   active: boolean("active").notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}).enableRLS();
 
 export const call = agents.table("call", {
   id: id(),
@@ -142,7 +149,7 @@ export const call = agents.table("call", {
   costUsd: numeric("cost_usd", { precision: 8, scale: 4 }).notNull().default("0"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}).enableRLS();
 
 export const recording = agents.table("recording", {
   id: id(),
@@ -153,7 +160,7 @@ export const recording = agents.table("recording", {
   retainUntil: date("retain_until").notNull(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}).enableRLS();
 
 export const transcript = agents.table("transcript", {
   id: id(),
@@ -162,7 +169,7 @@ export const transcript = agents.table("transcript", {
   summary: text("summary"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}).enableRLS();
 
 /** Append-only: a DB trigger (migrations/0001_consent_immutable.sql) rejects UPDATE and DELETE. */
 export const consentEvent = agents.table(
@@ -178,7 +185,7 @@ export const consentEvent = agents.table(
     createdAt: createdAt(),
   },
   (t) => [index("consent_event_contact_idx").on(t.contactId, t.occurredAt)],
-);
+).enableRLS();
 
 /** Keys on phone number, never on contact. */
 export const suppression = agents.table("suppression", {
@@ -187,11 +194,13 @@ export const suppression = agents.table("suppression", {
   reason: text("reason").notNull(),
   sourceCallId: uuid("source_call_id").references(() => call.id),
   createdAt: createdAt(),
-});
+}).enableRLS();
 
 export const technician = agents.table("technician", {
   id: id(),
   name: text("name").notNull(),
+  /** Needed to invite them to the booking's calendar event; HCP employees carry one. */
+  email: text("email"),
   hcpEmployeeId: text("hcp_employee_id"),
   maxJobsPerDay: integer("max_jobs_per_day").notNull().default(2),
   maxMilesBetweenJobs: integer("max_miles_between_jobs").notNull().default(50),
@@ -200,7 +209,7 @@ export const technician = agents.table("technician", {
   active: boolean("active").notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}).enableRLS();
 
 export const scheduleBlock = agents.table(
   "schedule_block",
@@ -217,7 +226,7 @@ export const scheduleBlock = agents.table(
     updatedAt: updatedAt(),
   },
   (t) => [index("schedule_block_tech_start_idx").on(t.technicianId, t.startAt)],
-);
+).enableRLS();
 
 export const booking = agents.table(
   "booking",
@@ -238,7 +247,7 @@ export const booking = agents.table(
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex("booking_idempotency_uq").on(t.idempotencyKey)],
-);
+).enableRLS();
 
 export const calendarInvite = agents.table("calendar_invite", {
   id: id(),
@@ -247,7 +256,7 @@ export const calendarInvite = agents.table("calendar_invite", {
   rsvpStatus: text("rsvp_status").notNull().default("none"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}).enableRLS();
 
 export const emailSend = agents.table(
   "email_send",
@@ -262,7 +271,7 @@ export const emailSend = agents.table(
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex("email_send_idempotency_uq").on(t.idempotencyKey)],
-);
+).enableRLS();
 
 export const schema = {
   account, contact, serviceAddress, scriptVersion, campaign, callTask, did, call, recording, transcript,

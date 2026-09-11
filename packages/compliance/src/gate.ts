@@ -36,6 +36,12 @@ export function runGate(i: GateInput): GateOutcome {
 }
 
 const DNC_CACHE_MS = 30 * 86_400_000;
+/**
+ * How long a Telnyx carrier lookup is trusted. Numbers do get ported between wireline and
+ * wireless, and a stale "landline" is exactly the error that dials a mobile, so this refreshes
+ * rather than resolving once and trusting it forever.
+ */
+export const LINE_TYPE_CACHE_MS = 90 * 86_400_000;
 
 export interface ClaimOptions { campaignId?: string; didId: string; now?: Date }
 export interface ClaimResult {
@@ -49,7 +55,7 @@ export interface ClaimResult {
  * Claims the next eligible CALL_TASK with SKIP LOCKED, runs the gate, and writes gate_result in the SAME transaction.
  * Returns null when nothing is queued. Only outcome.result === 'pass' may proceed to the vapi/telnyx adapters.
  */
-export async function gateAndClaim(db: AnyDb, adapters: Pick<Adapters, "dnc">, cfg: Config, opts: ClaimOptions): Promise<ClaimResult | null> {
+export async function gateAndClaim(db: AnyDb, adapters: Pick<Adapters, "dnc" | "telnyx">, cfg: Config, opts: ClaimOptions): Promise<ClaimResult | null> {
   const now = opts.now ?? new Date();
   return db.transaction(async (tx) => {
     const where = [eq(callTask.status, "queued"), sql`${callTask.earliestDialAt} <= ${now.toISOString()}`];
@@ -75,13 +81,24 @@ export async function gateAndClaim(db: AnyDb, adapters: Pick<Adapters, "dnc">, c
       await tx.update(contact).set({ dncFederal: dnc.federal, dncState: dnc.state, dncCheckedAt: now }).where(eq(contact.id, c.id));
     }
 
+    // line_type: cache 90 days, same shape as DNC above. contact.line_type defaults to 'unknown',
+    // which landline_only refuses, so without this every task gates as 'surface' forever.
+    // A lookup failure is deliberately left to propagate: the transaction rolls back, the task
+    // stays 'queued' and the job retries, rather than being written off as permanently blocked.
+    let lineTypeValue = c.lineType;
+    if (!c.lineTypeCheckedAt || now.getTime() - c.lineTypeCheckedAt.getTime() > LINE_TYPE_CACHE_MS) {
+      const looked = await adapters.telnyx.lookupLineType(c.phoneE164);
+      lineTypeValue = looked.line_type;
+      await tx.update(contact).set({ lineType: lineTypeValue, lineTypeCheckedAt: now }).where(eq(contact.id, c.id));
+    }
+
     const dayStart = new Date(now); dayStart.setUTCHours(0, 0, 0, 0);
     const [dials] = await tx.select({ n: count() }).from(call).where(and(eq(call.didId, d.id), gte(call.startedAt, dayStart)));
 
     const outcome = runGate({
       surface: cfg.COMPLIANCE_TARGET_SURFACE,
       allowMaRecording: cfg.ALLOW_MA_RECORDING,
-      contact: { phoneE164: c.phoneE164, lineType: c.lineType, state: c.state, timezone: c.timezone },
+      contact: { phoneE164: c.phoneE164, lineType: lineTypeValue, state: c.state, timezone: c.timezone },
       consent: { latestGrantAt: grant?.at ?? null, latestRevokeAt: revoke?.at ?? null },
       suppressed: !!sup,
       dnc,
@@ -99,6 +116,6 @@ export async function gateAndClaim(db: AnyDb, adapters: Pick<Adapters, "dnc">, c
       updatedAt: now,
     }).where(eq(callTask.id, task.id)).returning();
 
-    return { task: updated!, contact: c, campaign: camp, outcome };
+    return { task: updated!, contact: { ...c, lineType: lineTypeValue, dncFederal: dnc.federal, dncState: dnc.state }, campaign: camp, outcome };
   });
 }

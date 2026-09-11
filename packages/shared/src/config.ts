@@ -42,6 +42,28 @@ export const VENDOR_KEYS = [
 ] as const;
 export type VendorKey = (typeof VENDOR_KEYS)[number];
 
+/**
+ * The subset the dial path itself calls, and therefore the only keys required to leave dry_run.
+ * Requiring all 25 made a single test call depend on nine vendor signups; the rest stay mocked
+ * and are reported as `mode:"mock"` by /health plus a boot warning.
+ *
+ * All three Telnyx keys are required together on purpose: the adapter only goes real when it has
+ * every one, and its mock resolves most numbers to "landline" — the one value landline_only
+ * accepts. A partial Telnyx config outside dry_run would therefore fail *open* and dial mobiles.
+ *
+ * Deepgram, ElevenLabs and the LLM are absent because no code here calls them: those keys are
+ * pasted into Vapi's own Provider Keys, so demanding them locally gated nothing.
+ */
+export const DIAL_PATH_VENDOR_KEYS = [
+  "TELNYX_API_KEY",
+  "TELNYX_CONNECTION_ID",
+  "TELNYX_PUBLIC_KEY",
+  "VAPI_PRIVATE_KEY",
+  "VAPI_WEBHOOK_SECRET",
+  "VAPI_ASSISTANT_ID",
+  "DNC_API_KEY",
+] as const satisfies readonly VendorKey[];
+
 const vendorShape = Object.fromEntries(
   VENDOR_KEYS.map((k) => [k, z.string().min(1).optional()]),
 ) as Record<VendorKey, z.ZodOptional<z.ZodString>>;
@@ -67,11 +89,11 @@ export const configSchema = z
   })
   .superRefine((cfg, ctx) => {
     if (cfg.DIAL_MODE !== "dry_run") {
-      const missing = VENDOR_KEYS.filter((k) => !cfg[k]);
+      const missing = DIAL_PATH_VENDOR_KEYS.filter((k) => !cfg[k]);
       if (missing.length) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `DIAL_MODE=${cfg.DIAL_MODE} requires vendor keys; missing: ${missing.join(", ")}`,
+          message: `DIAL_MODE=${cfg.DIAL_MODE} requires the dial-path vendor keys; missing: ${missing.join(", ")}`,
         });
       }
       if (cfg.DIAL_MODE === "verified_only" && cfg.DIAL_ALLOWLIST.length === 0) {

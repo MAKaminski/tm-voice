@@ -87,6 +87,14 @@ Annual for every vendor key; quarterly for `INTERNAL_API_TOKEN`; Graph certifica
 2. Cards on Vapi, Deepgram, Railway Hobby, Resend Pro, ElevenLabs Starter; LLM auto-reload at $50.
 3. Rotate every trial-era key once.
 4. `DIAL_MODE=verified_only`, `DIAL_ALLOWLIST=<your own numbers>` → place test calls (Phase 5).
+   Only the dial-path keys are required to leave `dry_run`: `TELNYX_API_KEY`,
+   `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY`, `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`,
+   `VAPI_ASSISTANT_ID`, `DNC_API_KEY`. Every other vendor stays mocked and is listed in a boot
+   warning plus `/health`. Deepgram, ElevenLabs and the LLM are configured inside Vapi's own
+   Provider Keys, not here. Prerequisites in the database before a campaign can run:
+   a `SCRIPT_VERSION` row (`campaign.script_version_id` is NOT NULL), a `DID` row for the number
+   you bought, and a `campaign` with `apollo_saved_search_id` set and `status='active'` so
+   `apollo.syncCampaign` can fill the queue.
 5. `DIAL_MODE=live`, `COMPLIANCE_TARGET_SURFACE=landline_only`, first campaign 10 dials/day on one DID, every booking human-reviewed (Phase 6). Record measured cost per dial here.
 6. `consented_mobile` only after Phase 7 consent capture ships.
 

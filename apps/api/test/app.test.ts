@@ -70,7 +70,10 @@ describe("api", () => {
     expect((await json(res)).results[0].result).toMatch(/end the call/);
     const [s] = await t.db.select().from(suppression).where(eq(suppression.phoneE164, SEED.phones.landlineGa));
     expect(s).toBeDefined();
-    expect((await app.request("/tools/book_job", { method: "POST", body: "{}", headers: { "x-vapi-secret": "mock-vapi-secret" } })).status).toBe(501);
+    // Every tool is implemented now, so a malformed Vapi envelope is a 400, never a 501.
+    for (const tool of ["get_availability", "book_job", "send_packet"]) {
+      expect((await app.request(`/tools/${tool}`, { method: "POST", body: "{}", headers: { "x-vapi-secret": "mock-vapi-secret" } })).status).toBe(400);
+    }
   });
   it("POST /webhooks/hcp enqueues a materialize job", async () => {
     const res = await app.request("/webhooks/hcp", { method: "POST", body: JSON.stringify({ event: "job.scheduled", id: "job_x" }) });
