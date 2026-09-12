@@ -1,6 +1,6 @@
 # Architecture — TM Voice
 
-Autonomous outbound voice agent for Transparent Maintenance. Companion to `docs/ERD.md` (schema), `docs/COMPLIANCE.md` (pre-dial rules), `docs/RUNBOOK.md` (accounts, keys, go-live). Settled stack and decisions: build plan 2026-09-08.
+Autonomous outbound voice agent for Transparent Maintenance. Companion to `docs/ERD.md` (schema), `docs/COMPLIANCE.md` (pre-dial rules), `docs/RUNBOOK.md` (accounts, keys, go-live), `docs/CREDENTIALS.md` (where every credential comes from and how to rotate it). Settled stack and decisions: build plan 2026-09-08.
 
 ## Four layers
 

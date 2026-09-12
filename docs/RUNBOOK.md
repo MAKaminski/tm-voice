@@ -61,12 +61,16 @@ Run migrations once from your machine against the Railway Postgres: `DATABASE_UR
 
 ## 4. Vendor keys — paste list (each → 1Password "TM Voice" item → Railway variable on api + worker)
 
+**Canonical locations live in `docs/CREDENTIALS.md`** — exact portal paths, which values you invent
+rather than find, and the rotation procedure. The table below is the paste order; when a URL here and
+there disagree, `docs/CREDENTIALS.md` wins.
+
 | # | Variable(s) | Get it here | Notes |
 |---|---|---|---|
 | 1 | `HCP_API_KEY` | https://pro.housecallpro.com/pro/settings/api | Also subscribe webhooks `job.scheduled`, `job.completed`, `customer.updated`, `pro.created` → `https://<api-domain>/webhooks/hcp`. Confirm auth scheme (`Bearer` vs `Token`) — `/health` reports which works. |
 | 2 | `APOLLO_API_KEY` | https://app.apollo.io/#/settings/integrations/api | Master key. |
-| 3 | `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY` | https://portal.telnyx.com/#/app/api-keys · https://portal.telnyx.com/#/app/connections · https://portal.telnyx.com/#/app/account/public-key | $10 top-up; KYC → Verified; buy first DID at https://portal.telnyx.com/#/app/numbers/search-numbers and submit to https://www.freecallerregistry.com/fcr/ |
-| 4 | `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`, `VAPI_ASSISTANT_ID` | https://dashboard.vapi.ai/keys · assistant → Advanced → Server URL secret · assistant ID | Assistant is created in Phase 4; server URL = `https://<api-domain>/tools`. BYO keys for Deepgram/ElevenLabs/LLM under Provider Keys. |
+| 3 | `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY` | https://portal.telnyx.com/#/app/api-keys · https://portal.telnyx.com/#/app/next/call-control/applications · https://portal.telnyx.com/#/app/account/public-key | `TELNYX_CONNECTION_ID` is the **Application ID** of a Voice API Application, *not* a SIP Connection — `#/app/connections` is the wrong page. $10 top-up; KYC → Verified (Account Settings → Account Level); buy first DID at https://portal.telnyx.com/#/app/numbers/search-numbers and submit to https://www.freecallerregistry.com/fcr/ |
+| 4 | `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`, `VAPI_ASSISTANT_ID` | https://dashboard.vapi.ai/org/api-keys · **you invent the secret** · https://dashboard.vapi.ai/assistants | `VAPI_WEBHOOK_SECRET` is not on any page: generate a string, put it in a Vapi *Bearer Token* Custom Credential selected under Assistant → Advanced → Webhook Server → Authorization, and paste the same string here. Vapi sends it as `X-Vapi-Secret`. The assistant's `firstMessage` must equal `SCRIPT_VERSION.disclosure_line` — the seeded *Riley* demo assistant does not. Server URL = `https://<api-domain>/tools`. BYO keys for Deepgram/ElevenLabs/LLM under Provider Keys. |
 | 5 | `DEEPGRAM_API_KEY` | https://console.deepgram.com/ → project → API Keys | Member role. |
 | 6 | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | https://elevenlabs.io/app/settings/api-keys · https://elevenlabs.io/app/voice-library | Scope to TTS. Flash model. |
 | 7 | `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL` | https://console.anthropic.com/settings/keys (or https://platform.openai.com/api-keys) | $5 prepay; mini tier. |
@@ -79,7 +83,7 @@ After each paste, redeploy api and check `/health`: that vendor flips from `mode
 
 ## 5. Key rotation
 
-Annual for every vendor key; quarterly for `INTERNAL_API_TOKEN`; Graph certificate at 24 months (set a calendar reminder — expiry is the classic 2am outage). Rotate = new value in 1Password → Railway variable → redeploy → confirm `/health`.
+Procedure and per-vendor rotation URLs: **`docs/CREDENTIALS.md` § Rotation**. Annual for every vendor key; quarterly for `INTERNAL_API_TOKEN`; Graph certificate at 24 months (set a calendar reminder — expiry is the classic 2am outage). Rotate = new value in 1Password → Railway variable on api *and* worker → redeploy → confirm `/health`. Note that `/health` cannot validate a credential while `DIAL_MODE=dry_run`: every adapter reports `mock` whatever its keys hold.
 
 ## 6. Go-live flip (nothing in code changes)
 
