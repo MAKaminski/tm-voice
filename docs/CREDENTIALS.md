@@ -35,6 +35,13 @@ Portal: <https://portal.telnyx.com/>
 | `TELNYX_CONNECTION_ID` | **Voice → Programmable Voice → Call Control / TeXML Applications** → Create → open it → **Application ID**<br><https://portal.telnyx.com/#/app/next/call-control/applications> | **This is not a SIP Connection.** The API calls the object a *call control application* and the field `connection_id`; the portal calls it a *Voice API Application* and the value *Application ID*. Same number, three names — which is why searching the portal for "connection id" finds nothing. `#/app/connections` is the SIP Connections page and is the wrong place. |
 | `TELNYX_PUBLIC_KEY` | Account Settings → **Keys & Credentials** → **Public Key** sub-tab<br><https://portal.telnyx.com/#/app/account/public-key> | Ed25519 webhook signing key, account-wide. Not exposed by the API — the Telnyx OpenAPI document has no public-key endpoint, so the portal is the only source. Rotate: <https://support.telnyx.com/en/articles/8370064-update-webhook-sign-key-guide> |
 
+When you create the Voice API Application, its **Webhook URL** field is required. Point it at
+`https://<api-domain>/webhooks/telnyx` and use **API v2** — the `telnyx` adapter verifies v2's
+Ed25519 `telnyx-signature-ed25519` / `telnyx-timestamp` headers. Note that route is **not built yet**
+(`apps/api/src/routes/webhooks.ts` serves only `/hcp`), so `telnyxWebhookOk()` currently has no
+caller. Nothing is dialed in `dry_run`, so an unimplemented URL costs nothing today, but the route
+has to exist before leaving it.
+
 All three are required together outside `dry_run`. The Telnyx mock resolves most numbers to
 `landline`, the one value `landline_only` accepts, so a partial Telnyx config would fail *open* and
 dial mobiles. `DIAL_PATH_VENDOR_KEYS` enforces the set.
@@ -69,7 +76,7 @@ General Settings; the assistant-level value overrides it.
 | `RESEND_API_KEY`, `MAIL_FROM` | <https://resend.com/api-keys> · <https://resend.com/domains> | Domain `mail.transparentmaintenance.com`; key scoped `sending_access` to it. |
 | `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_CERT_PEM` | <https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade> → the app registration → Overview (tenant + client id) → Certificates & secrets → Certificates (upload) | `MS_CLIENT_CERT_PEM` is the **PEM text**, holding a `CERTIFICATE` block *and* a `PRIVATE KEY` block, because PS256 `private_key_jwt` signs with the key and sends `x5t#S256` of the cert. A certificate thumbprint or key id GUID is not a substitute and will fail at `parseCertPem()`. Expires at 24 months — set a reminder. |
 | `MS_BOOKING_MAILBOX` | <https://admin.exchange.microsoft.com/#/mailboxes> | Shared mailbox `booking@transparentmaintenance.com`; scope the app to it alone with `New-ManagementRoleAssignment`. |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | Sign up at the plain <https://dash.cloudflare.com/sign-up>, then R2 → bucket → Manage R2 API Tokens (Object Read & Write, one bucket) | A `?to=` deep link on the signup flow fails with "Invalid redirect_uri". Account id is in the R2 sidebar; the secret is shown once. |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | R2 → bucket → Manage R2 API Tokens (Object Read & Write, one bucket). Sign-up, if ever needed again, is the plain <https://dash.cloudflare.com/sign-up> — a `?to=` deep link there fails with "Invalid redirect_uri". | **Minted — values are in 1Password, not here.** `R2_ACCOUNT_ID` is the 32-hex label in the S3 endpoint host (`https://<account_id>.r2.cloudflarestorage.com/<bucket>`), so you never need to hunt the sidebar for it. The secret is shown once. A *Cloudflare API token* (`cfat_…`) is a different credential and is **not** used here: the `r2` adapter signs SigV4 with the access key pair, so a broad account token should not be minted or stored for this. See the two open items below before setting `R2_BUCKET`. |
 | `INTERNAL_API_TOKEN` | **You invent this value.** `openssl rand -hex 20` | Console → api bearer. Minimum 16 chars (`config.ts`). Same value on api, worker and console. |
 | `DATABASE_URL`, `REDIS_URL` | Railway → the service → Variables | Postgres is Supabase, not the Railway plugin. |
 
@@ -94,3 +101,17 @@ Two traps worth knowing before you rotate anything:
   `z.string().min(1)`. `dropBlanks()` in `config.ts` now treats whitespace-only as absent, so a
   blank falls back to the mock instead of killing boot — but it also means a variable you *think*
   you set may be doing nothing. Delete a variable you mean to unset rather than blanking it.
+
+## Open items on the storage side
+
+Two things about R2 that are decisions, not lookups, and both get more expensive the longer they wait.
+
+- **The Cloudflare account belongs to Modular Equity, not Transparent Maintenance.** Call recordings
+  are a Transparent Maintenance record with a five-year retention requirement, so they should not sit
+  under another entity's account. Migrating later means re-minting the R2 key pair, updating
+  `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` in Railway on **both** api and worker,
+  and moving whatever has accumulated. Do it before recordings start, not after.
+- **`R2_BUCKET` should be its own bucket.** The bucket minted so far (`tm-os-1`) belongs to TM OS.
+  `docs/ARCHITECTURE.md` assumes a dedicated recordings bucket, the retention sweeper deletes on a
+  five-year clock, and the R2 API token should be scoped to one bucket — all three argue for a
+  separate `tm-call-recordings` rather than sharing an application bucket.
