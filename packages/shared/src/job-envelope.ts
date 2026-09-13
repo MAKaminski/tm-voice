@@ -16,5 +16,14 @@ export function envelope(entityId: string, idempotencyKey: string): JobEnvelope 
   return { entity_id: entityId, idempotency_key: idempotencyKey, attempt: 0, enqueued_at: new Date().toISOString() };
 }
 
+/**
+ * BullMQ rejects a custom job id containing ":" ("Custom Id cannot contain :"), but idempotency keys are
+ * colon-joined and often end in an ISO timestamp. The payload keeps the key verbatim; only the BullMQ id is
+ * escaped, reversibly ("%" first, then ":"), so two different keys can never map to the same job id.
+ */
+export function bullJobId(key: string): string {
+  return key.replaceAll("%", "%25").replaceAll(":", "%3A");
+}
+
 /** One retry policy for every queue: 5 attempts, exponential 30s -> 16m. */
 export const RETRY_POLICY = { attempts: 5, backoff: { type: "exponential" as const, delay: 30_000 } };

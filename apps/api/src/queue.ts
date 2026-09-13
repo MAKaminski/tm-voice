@@ -1,7 +1,7 @@
 /** Thin BullMQ producer. Every job carries the standard envelope (CLAUDE.md rule 2). Falls back to inline handlers without Redis. */
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
-import { DLQ_NAME, type JobEnvelope, QUEUES, type QueueName, RETRY_POLICY, jobEnvelopeSchema, logger } from "@tm/shared";
+import { DLQ_NAME, type JobEnvelope, QUEUES, type QueueName, RETRY_POLICY, bullJobId, jobEnvelopeSchema, logger } from "@tm/shared";
 
 export type JobPayload<T = Record<string, unknown>> = JobEnvelope & T;
 export type InlineHandler = (queue: QueueName, name: string, payload: JobPayload) => Promise<void>;
@@ -35,7 +35,7 @@ export function createProducer(redisUrl: string | undefined, inline?: InlineHand
   return {
     async enqueue(queue, name, payload) {
       jobEnvelopeSchema.parse(payload);
-      const job = await get(queue).add(name, payload, { jobId: payload.idempotency_key });
+      const job = await get(queue).add(name, payload, { jobId: bullJobId(payload.idempotency_key) });
       return { id: job.id ?? payload.idempotency_key, inline: false };
     },
     async close() { await Promise.all([...queues.values()].map((q) => q.close())); await connection.quit(); },

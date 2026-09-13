@@ -2,7 +2,7 @@ import { Queue, Worker } from "bullmq";
 import { createAdapters, mockedVendors } from "@tm/adapters";
 import { createProducer, createRedis } from "@tm/api";
 import { createDb } from "@tm/db";
-import { DLQ_NAME, QUEUES, RETRY_POLICY, getConfig, jobEnvelopeSchema, logger } from "@tm/shared";
+import { DLQ_NAME, QUEUES, RETRY_POLICY, bullJobId, getConfig, jobEnvelopeSchema, logger } from "@tm/shared";
 import type { Ctx } from "./context.js";
 import { REGISTRY, SCHEDULES } from "./registry.js";
 
@@ -31,7 +31,13 @@ const workers = QUEUES.map((q) => {
     if (!job) return;
     const final = job.attemptsMade >= (job.opts.attempts ?? RETRY_POLICY.attempts);
     logger.error({ queue: q, job: job.name, id: job.id, attempt: job.attemptsMade, final, err: err.message }, "job failed");
-    if (final) await dlq.add(`${q}.${job.name}`, { ...job.data, _origin: { queue: q, name: job.name, id: job.id, error: err.message } }, { jobId: `dead:${q}:${job.id}` });
+    if (!final) return;
+    // A throw here is an unhandled rejection that exits the worker, so a DLQ failure is logged, never raised.
+    try {
+      await dlq.add(`${q}.${job.name}`, { ...job.data, _origin: { queue: q, name: job.name, id: job.id, error: err.message } }, { jobId: bullJobId(`dead:${q}:${job.id}`) });
+    } catch (dlqErr) {
+      logger.error({ queue: q, job: job.name, id: job.id, err: (dlqErr as Error).message }, "dead-letter enqueue failed");
+    }
   });
   return w;
 });
