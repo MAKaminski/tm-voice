@@ -36,7 +36,12 @@ export function createResendAdapter(cfg: Config): ResendAdapter & { mock?: MockR
     name: "resend", mode: "real",
     async healthcheck() {
       const r = await fetch("https://api.resend.com/domains", { headers: { Authorization: `Bearer ${cfg.RESEND_API_KEY!}` } });
-      return { vendor: "resend", ok: r.ok, mode: "real", detail: r.ok ? undefined : `HTTP ${r.status}` };
+      if (r.ok) return { vendor: "resend", ok: true, mode: "real" };
+      // docs/CREDENTIALS.md scopes the key to sending_access, and Resend answers GET /domains for such a key with
+      // 401 restricted_api_key. That proves the key authenticates, so it is healthy; any other 401 is a bad key.
+      const body = (await r.json().catch(() => ({}))) as { name?: string };
+      if (r.status === 401 && body.name === "restricted_api_key") return { vendor: "resend", ok: true, mode: "real", detail: "sending-only key" };
+      return { vendor: "resend", ok: false, mode: "real", detail: `HTTP ${r.status}` };
     },
     async sendEmail(input) {
       const v = validate("resend", sendEmailInput, input);

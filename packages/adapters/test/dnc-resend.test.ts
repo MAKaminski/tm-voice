@@ -63,4 +63,14 @@ describe("resend real adapter", () => {
     await expect(createResendAdapter(realConfig()).sendEmail({ to: "a@b.co", subject: "s", html: "<p/>", template: "t", idempotency_key: "k" }))
       .rejects.toMatchObject({ code: "missing_email_id" });
   });
+
+  it("treats a sending-only key as healthy: Resend answers GET /domains with 401 restricted_api_key", async () => {
+    stubFetch(() => ({ status: 401, json: { statusCode: 401, name: "restricted_api_key", message: "This API key is restricted to only send emails" } }));
+    await expect(createResendAdapter(realConfig()).healthcheck()).resolves.toMatchObject({ ok: true, detail: "sending-only key" });
+  });
+
+  it("reports any other 401 as a bad key", async () => {
+    stubFetch(() => ({ status: 401, json: { statusCode: 401, name: "validation_error", message: "API key is invalid" } }));
+    await expect(createResendAdapter(realConfig()).healthcheck()).resolves.toMatchObject({ ok: false, detail: "HTTP 401" });
+  });
 });
