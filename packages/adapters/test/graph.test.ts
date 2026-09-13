@@ -70,6 +70,12 @@ describe("graph certificate credentials", () => {
 });
 
 describe("graph real adapter", () => {
+  it("healthchecks the booking calendar, not the directory entry the app may not read", async () => {
+    const calls = tokenThen(() => ({ json: { id: "cal_1" } }));
+    await expect(createGraphAdapter(graphCfg()).healthcheck()).resolves.toMatchObject({ ok: true });
+    expect(calls[1]!.url).toBe("https://graph.microsoft.com/v1.0/users/booking%40tm.com/calendar?%24select=id");
+  });
+
   it("exchanges the assertion for a token with the documented form body", async () => {
     const calls = tokenThen(() => ({ json: { id: "evt_1" } }));
     const g = createGraphAdapter(graphCfg());

@@ -115,7 +115,9 @@ export function createGraphAdapter(cfg: Config): GraphAdapter & { mock?: MockRec
     name: "graph", mode: "real",
     async healthcheck() {
       try {
-        await request({ vendor: "graph", url: `${GRAPH}/users/${mailbox}`, query: { $select: "id" }, headers: await authed(), retry: { attempts: 1 } });
+        // Probe the booking calendar, the only thing this app may touch: GET /users/{id} needs directory read (User.Read.All),
+        // which the app is deliberately not granted, so it answered 403 while calendar writes worked.
+        await request({ vendor: "graph", url: `${GRAPH}/users/${mailbox}/calendar`, query: { $select: "id" }, headers: await authed(), retry: { attempts: 1 } });
         return { vendor: "graph", ok: true, mode: "real" };
       } catch (e) {
         return { vendor: "graph", ok: false, mode: "real", detail: e instanceof Error ? e.message : "graph unreachable" };
