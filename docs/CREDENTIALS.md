@@ -32,11 +32,13 @@ Portal: <https://portal.telnyx.com/>
 | Variable | Exact path | Notes |
 |---|---|---|
 | `TELNYX_API_KEY` | Account Settings → **API Keys** → create → reveal once<br><https://portal.telnyx.com/#/app/api-keys> | Shown once at creation. Rotating means creating a new key and deleting the old one. |
-| `TELNYX_CONNECTION_ID` | **Voice → Programmable Voice → Call Control / TeXML Applications** → Create → open it → **Application ID**<br><https://portal.telnyx.com/#/app/next/call-control/applications> | **This is not a SIP Connection.** The API calls the object a *call control application* and the field `connection_id`; the portal calls it a *Voice API Application* and the value *Application ID*. Same number, three names — which is why searching the portal for "connection id" finds nothing. `#/app/connections` is the SIP Connections page and is the wrong place. |
-| `TELNYX_PUBLIC_KEY` | Account Settings → **Keys & Credentials** → **Public Key** sub-tab<br><https://portal.telnyx.com/#/app/account/public-key> | Ed25519 webhook signing key, account-wide. Not exposed by the API — the Telnyx OpenAPI document has no public-key endpoint, so the portal is the only source. Rotate: <https://support.telnyx.com/en/articles/8370064-update-webhook-sign-key-guide> |
+| `TELNYX_CONNECTION_ID` | `POST https://api.telnyx.com/v2/call_control_applications` with `application_name` and `webhook_event_url` → `data.id`<br>Or the portal: **Voice → Programmable Voice → Call Control / TeXML Applications** → Create → open it → **Application ID** (<https://portal.telnyx.com/#/app/next/call-control/applications>) | **This is not a SIP Connection.** The API calls the object a *call control application* and the field `connection_id`; the portal calls it a *Voice API Application* and the value *Application ID*. Same number, three names — which is why searching the portal for "connection id" finds nothing. `#/app/connections` is the SIP Connections page and is the wrong place. |
+| `TELNYX_PUBLIC_KEY` | `curl -H "Authorization: Bearer $TELNYX_API_KEY" https://api.telnyx.com/v2/public_key` → `data.public`<br>Or the portal: Account Settings → **Keys & Credentials** → **Public Key** sub-tab (<https://portal.telnyx.com/#/app/account/public-key>) | Ed25519 webhook signing key, account-wide. **`GET /v2/public_key` works even though the published OpenAPI document does not list it** — searching that document for a public-key endpoint finds only WireGuard and is misleading. Rotate: <https://support.telnyx.com/en/articles/8370064-update-webhook-sign-key-guide> |
 
 When you create the Voice API Application, its **Webhook URL** field is required. Point it at
-`https://<api-domain>/webhooks/telnyx` and use **API v2** — the `telnyx` adapter verifies v2's
+`https://<api-domain>/webhooks/telnyx` and set `call_cost_in_webhooks` (portal: **Enable Call Cost**)
+— `docs/RUNBOOK.md` §7 wants a measured cost per dial and that figure cannot be backfilled. Use
+**API v2** — the `telnyx` adapter verifies v2's
 Ed25519 `telnyx-signature-ed25519` / `telnyx-timestamp` headers. Note that route is **not built yet**
 (`apps/api/src/routes/webhooks.ts` serves only `/hcp`), so `telnyxWebhookOk()` currently has no
 caller. Nothing is dialed in `dry_run`, so an unimplemented URL costs nothing today, but the route
@@ -101,6 +103,18 @@ Two traps worth knowing before you rotate anything:
   `z.string().min(1)`. `dropBlanks()` in `config.ts` now treats whitespace-only as absent, so a
   blank falls back to the mock instead of killing boot — but it also means a variable you *think*
   you set may be doing nothing. Delete a variable you mean to unset rather than blanking it.
+
+## Two Telnyx things that are not credentials
+
+Both are required before a dial and neither is an environment variable, so nothing in the config
+loader will tell you they are missing:
+
+- **A DID.** `GET /v2/phone_numbers` returning an empty list means there is no number to call from,
+  and the dial fails at the vendor rather than at the gate. Buy one at
+  <https://portal.telnyx.com/#/app/numbers/search-numbers>, then register it at
+  <https://www.freecallerregistry.com/fcr/>. A `did` row also has to exist in the database.
+- **Account balance and KYC.** `GET /v2/balance` shows what is actually funded. KYC to Verified is
+  account icon → Account Settings → **Account Level**.
 
 ## Open items on the storage side
 
