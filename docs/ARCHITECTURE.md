@@ -1,109 +1,417 @@
 # Architecture — TM Voice
 
-Autonomous outbound voice agent for Transparent Maintenance. Companion to `docs/ERD.md` (schema), `docs/COMPLIANCE.md` (pre-dial rules), `docs/RUNBOOK.md` (accounts, keys, go-live), `docs/CREDENTIALS.md` (where every credential comes from and how to rotate it). Settled stack and decisions: build plan 2026-09-08.
+Autonomous outbound voice agent for Transparent Maintenance. Companions: `docs/ERD.md` (schema), `docs/COMPLIANCE.md` (pre-dial rules), `docs/RUNBOOK.md` (go-live sequence), `docs/CREDENTIALS.md` (where every credential comes from and how to rotate it).
 
-## Four layers
+This document answers four questions, in order: **what is connected**, **in what way**, **what has to be true for it to run that way**, and **what changes when the dial mode flips**. Every diagram is drawn from the code as it stands on `main` (2026-09-13), not from the build plan. Where the two disagree, the diagram says so.
 
-| Layer | Component | Where | Status (Phase 0–2) |
-|---|---|---|---|
-| Front-end | Campaign console (dashboard, review queue, live board) | `apps/console` (Next.js 15) | dashboard read-only; review/live are placeholders (Phases 4/6) |
-| Front-end | Self-schedule booking page `/book/[token]` | `apps/console/app/book` | **built** — uses availability service, writes `booking` |
-| Middleware | Tool API for the agent (`/tools/*`), booking API, webhooks, health | `apps/api` (Hono) | all four tools **built** — `opt_out`, `get_availability`, `book_job`, `send_packet` |
-| Middleware | Availability service (materializer + slot query + Redis cache) | `apps/api/src/availability` | **built** |
-| Middleware | Dial orchestrator, campaign ingestion, fulfillment, post-call pipeline, retention sweeper, schedulers | `apps/worker` (BullMQ) | dial.claim, `apollo.syncCampaign`, `dial.requeue` and all three fulfillment handlers **built**; only the postcall pipeline and `apollo.logCall` remain stubs |
-| Middleware | Pre-dial gate (incl. line_type enrichment), suppression, consent ledger, calling windows, disclosure | `packages/compliance` | **built** |
-| Middleware | Vendor adapters (apollo, hcp, graph, resend, telnyx, vapi, r2, dnc) | `packages/adapters` | mocks built; real clients built for 7 of 8 — **hcp real client is blocked** (see below) |
-| Middleware | Config loader, logger, errors, job envelope | `packages/shared` | **built** |
-| Back-end | Postgres schema, migrations, seed | `packages/db` (Drizzle) | **built**, 17 tables |
-| Back-end | Redis: BullMQ queues + slot cache | Railway plugin | optional in dry_run |
-| Back-end | Cloudflare R2 recordings (5-year retention) | via `r2` adapter | mock |
-| Infrastructure | Railway (api, worker, console + Postgres + Redis) | `infra/railway.json`, `apps/*/Dockerfile` | prepared; deploy blocked on `railway login` |
-| Infrastructure | Telnyx SIP/DIDs, Vapi orchestration, GitHub Actions CI | `.github/workflows/ci.yml` | CI built |
+How to read the diagrams:
 
-## Patterns (minimal and repetitive)
+| Mark | Meaning |
+|---|---|
+| Solid arrow `──▶` | Built, and runs for real once its keys are present |
+| Dashed arrow `- - ▶` | Built as a mock only, or **not built** — the label says which |
+| Green outline | Every key set, real client implemented |
+| Amber outline | Keys partly set, or a prerequisite outside this repo is missing |
+| Amber dashed outline | A gap in this repo's code |
 
-| Pattern | Shape | Used by |
+---
+
+## 1. Runtime topology — what runs where
+
+Three Railway services, one Redis, one Postgres. The console never touches the database; everything it shows comes through the api with a bearer token.
+
+```mermaid
+flowchart LR
+  classDef svc fill:#e2f0ef,stroke:#0e6d6a,color:#111
+  classDef store fill:#f2f5f7,stroke:#6b788a,color:#111
+  classDef human fill:#f9ece2,stroke:#a8501a,color:#111
+
+  subgraph people["People"]
+    reviewer(["Reviewer<br/>browser"]):::human
+    booker(["Prospect<br/>self-schedule link"]):::human
+  end
+
+  subgraph railway["Railway · production"]
+    console["console<br/>Next.js 15 · port 3000<br/>server components only, no DB"]:::svc
+    api["api<br/>Hono · port 8787"]:::svc
+    worker["worker<br/>BullMQ · 8 queues<br/>dial concurrency = 1"]:::svc
+    redis[("Redis<br/>BullMQ queues + DLQ 'dead'<br/>slot cache, 15 min TTL")]:::store
+  end
+
+  subgraph supabase["Supabase TM1"]
+    pg[("Postgres<br/>schema agents · 17 tables<br/>RLS enabled, zero policies")]:::store
+  end
+
+  reviewer -->|"HTTPS"| console
+  booker -->|"HTTPS · /book/:token"| console
+  console -->|"Bearer INTERNAL_API_TOKEN<br/>/campaigns · /bookings · /availability"| api
+  console -->|"public<br/>/health · /book/:token"| api
+  api <-->|"postgres-js<br/>DATABASE_URL · 5432 session mode"| pg
+  worker <-->|"postgres-js<br/>DATABASE_URL"| pg
+  api -->|"enqueue · REDIS_URL<br/>jobId = idempotency_key"| redis
+  redis -->|"consume<br/>5 attempts · exp backoff 30s→16m"| worker
+  worker -->|"enqueue follow-on jobs"| redis
+  api -.->|"read/write slot cache"| redis
+```
+
+**What has to be true for this to run:**
+
+| Requirement | Where it is enforced | What happens if it is not met |
 |---|---|---|
-| Adapter | `{ name, mode, healthcheck() }` + typed methods; zod input; `AdapterError{vendor,code,retryable}`; `withRetry`; mock when key absent or `DIAL_MODE=dry_run` | all 8 vendors |
-| Vendor HTTP call | `request()` in `packages/adapters/src/base.ts`: query building, JSON encode/decode, 15s timeout, status → `AdapterError` (408/425/429/5xx and transport errors retryable), wrapped in `withRetry` | every real client except r2, which signs via the S3 SDK |
-| Job envelope | `{ entity_id, idempotency_key, attempt, enqueued_at }`; BullMQ `jobId = idempotency_key`; one retry policy; one DLQ (`dead`); `pnpm replay` | every queue |
-| Processor registry | `REGISTRY[queue][jobName] → (ctx, payload)` in `apps/worker/src/registry.ts` | every worker job |
-| Gate-then-act | `gateAndClaim()` writes `gate_result` in the claiming transaction; only `pass` reaches an adapter | dial orchestrator |
-| Materialize + invalidate | pull vendor state into a table on a schedule + webhook; serve from Redis with TTL | schedule_block / slots |
-| Token-per-contact public page | `contact.booking_token` → `/book/:token` | booking page |
-| One booking write path | `createBooking()` in `apps/api/src/booking-core.ts`, idempotent on (contact, window_start) | `/book/:token` and the agent's `book_job` tool |
-| Stateless slot handle | `slot_id` = short hash of (technician, window_start); `book_job` recomputes slots and matches, so a stale id simply stops matching | `get_availability` → `book_job` |
-| Idempotent write | unique `idempotency_key` column + `onConflictDoNothing` | booking, email_send |
+| `DATABASE_URL`, `INTERNAL_API_TOKEN` (≥16 chars) | `packages/shared/src/config.ts`, zod, at boot | Process exits with the missing name. Nothing partial starts. |
+| `REDIS_URL` | Required by the **worker** unconditionally; required by the **api** only outside `dry_run` | Worker throws at boot. In `dry_run` the api falls back to an inline producer that runs jobs in-process — fine for tests, a footgun in production because there is no retry, no DLQ, and no scheduler. |
+| The `agents` schema is migrated | `pnpm db:migrate` (drizzle, `postgres-js`) — never `drizzle-kit push`, which would diff TM1's other schemas | A missing column fails the first query that touches it, e.g. `technician.email` in `slots.ts`. This has happened once. |
+| Session-mode Postgres (port 5432) | `packages/db/src/client.ts` sets `prepare: false`, so the transaction pooler (6543) *works* for queries, but the drizzle **migrator** needs session mode | Migrations fail with prepared-statement errors on 6543. Supabase's direct host (`db.<ref>.supabase.co`) is IPv6-first; if it does not resolve from Railway, use the session pooler on 5432. |
+| `HOSTNAME=0.0.0.0` in the console image | `apps/console/Dockerfile` | Next standalone binds to the container id and Railway returns 502 while reporting the deploy as SUCCESS. Fixed, but worth knowing why the line is there. |
 
-Before adding a component or pattern, extend one of these. Two components solving the same problem differently is a finding.
+---
 
-## Features → components → tables owned
+## 2. Vendor connections — what talks to whom, and with what
 
-| Feature | Components | Owns tables |
-|---|---|---|
-| Campaign & dial | worker `dial.tick`/`dial.claim`, compliance gate, telnyx/vapi adapters | campaign, call_task, call, did, script_version |
-| Compliance | compliance package, dnc adapter, `/tools/opt_out` | consent_event, suppression |
-| Availability & booking | api availability service, booking routes, console booking page, hcp adapter | technician, schedule_block, service_address, booking |
-| Fulfillment | worker `hcp.createJob` / `graph.createEvent` / `resend.sendPacket`, review queue | calendar_invite, email_send |
-| Post-call (Phase 5) | worker postcall/apollo stubs, r2 adapter | recording, transcript |
-| CRM sync | apollo adapter | account, contact |
+Every vendor call goes through one adapter in `packages/adapters/<vendor>` (rule 1). Each adapter decides at boot whether it is `real` or `mock`: **mock if `DIAL_MODE=dry_run`, or if any of its own keys is absent.** The label on each edge names the protocol, the credential, and the idempotency mechanism.
 
-## Vendor clients
+```mermaid
+flowchart LR
+  classDef svc fill:#e2f0ef,stroke:#0e6d6a,color:#111
+  classDef real fill:#fff,stroke:#4d7c3f,stroke-width:2px,color:#111
+  classDef partial fill:#fff,stroke:#a8501a,stroke-width:2px,color:#111
+  classDef gap fill:#fff,stroke:#a8501a,stroke-dasharray:5 3,color:#a8501a
+  classDef human fill:#f9ece2,stroke:#a8501a,color:#111
 
-Each adapter selects its mock when `DIAL_MODE=dry_run` or any of its keys is absent, so everything below only runs once real keys are set. None of it has been exercised against a live vendor yet — no account has keys — so the wire shapes come from published specs and docs, and the tests assert the exact request each client builds against a stubbed `fetch`.
+  worker["worker"]:::svc
+  api["api"]:::svc
+  prospect(["Prospect's phone"]):::human
 
-| Vendor | Real client | Source of the wire format | Constraint worth knowing |
-|---|---|---|---|
-| telnyx | `GET /number_lookup/{n}?type=carrier`, `POST /calls`, Ed25519 webhook verify | Telnyx OpenAPI spec | `carrier.type` maps to `landline` **only** for `fixed line`; `fixed line or mobile`, toll free and anything unrecognised become `unknown`, which `landline_only` refuses. `command_id` = call_task id, so a retry cannot double-dial |
-| vapi | `POST /call`, `GET /call/{id}`, `GET /phone-number` | Vapi OpenAPI spec | Vapi has **no metadata field** on the call object, and addresses caller ID by `phoneNumberId`, not E.164. The correlation id rides in `name` (40-char cap); the DID is resolved through `/phone-number` and cached per process |
-| graph | client-credential token + `POST /users/{mailbox}/events`, `GET …/events/{id}` | Microsoft Learn | `private_key_jwt`: PS256 over `x5t#S256`, so `MS_CLIENT_CERT_PEM` must hold **both** the CERTIFICATE and PRIVATE KEY blocks. Token cached until a minute before expiry. `transactionId` makes create idempotent |
-| resend | `POST /emails` | Resend API docs | `Idempotency-Key` dedupes for 24h; capped at 256 chars |
-| apollo | `POST /phone_calls`, `PATCH /accounts/{id}`, `POST /contacts/search` | Apollo API docs | All three need a **master** key. Apollo documents `/phone_calls` params as **query string**, not a body, and offers no idempotency header — the job's own key is the only guard. Saved searches are addressed as `contact_label_ids` |
-| dnc | `GET /api/v1/check-1/` | DoNotCallDNC developer docs | US-only: a non-`+1` number is refused rather than reported clean, and an inconclusive body raises. The vendor returns **only a federal determination**, so `state` is always false and state-level scrubbing is an open compliance gap |
-| r2 | S3 `PutObject` / `GetObject` presign / `DeleteObject` | AWS S3 SDK | The only client not using `request()`; it needs SigV4, so it uses `@aws-sdk/client-s3` (permitted by rule 1 inside `packages/adapters/<vendor>`) pinned to the fetch handler. Presigned URLs cap at 7 days |
-| **hcp** | **not implemented** | — | `docs.housecallpro.com` renders client-side and publishes no fetchable OpenAPI document, so the auth scheme (`Bearer` vs `Token`), the `/jobs` scheduled-date filters, the list envelope and pagination, whether an arrival-window endpoint exists, and the webhook signing scheme are all unverified. Rather than put guessed endpoints on the path that materializes availability and writes jobs back, the five methods raise `not_implemented` with that reason. Resolve alongside RUNBOOK §0 check 1 (whether the MAX plan can mint a key at all); the mock keeps availability running meanwhile |
+  subgraph dialpath["Dial path — the 7 DIAL_PATH_VENDOR_KEYS"]
+    vapi["Vapi<br/>assistant db67c732 · 4 tools<br/>keys: 3 of 3 set"]:::real
+    telnyx["Telnyx<br/>app tm-voice-production<br/>keys: 3 of 3 set · DID: none yet"]:::partial
+    dnc["DoNotCallDNC<br/>keys: 0 of 1 set"]:::partial
+  end
 
-## What a live call needs
+  subgraph fulfil["Fulfillment"]
+    hcp["Housecall Pro<br/>key set · real client NOT IMPLEMENTED"]:::gap
+    msgraph["Microsoft Graph<br/>keys: 4 of 4 set · cert to 2028-09-12"]:::real
+    resend["Resend<br/>keys: 2 of 2 set"]:::real
+  end
 
-Leaving `dry_run` requires only `DIAL_PATH_VENDOR_KEYS` (both Telnyx, Vapi and DNC sets) rather than all 25 vendor keys — a first test call should not depend on Graph certificates or a Resend domain. Every other vendor stays mocked, is reported `mode:"mock"` by `/health`, and is named in a boot warning from both api and worker. All three Telnyx keys are required together because the adapter only goes real with the full set and its mock resolves most numbers to `landline`, so a partial Telnyx config would fail *open*.
+  subgraph other["Ingest · post-call"]
+    apollo["Apollo<br/>master key set"]:::real
+    r2["Cloudflare R2<br/>keys in hand · bucket undecided"]:::partial
+  end
 
-Two things gate a dial regardless of keys, and both are easy to miss:
+  worker -->|"GET /number_lookup · Bearer TELNYX_API_KEY<br/>line_type cached 90d on contact"| telnyx
+  worker -->|"GET check · DNC_API_KEY<br/>federal only · cached 30d"| dnc
+  worker -->|"POST /call · Bearer VAPI_PRIVATE_KEY<br/>assistantId · phoneNumberId · name = call_task_id"| vapi
+  vapi -->|"BYO SIP trunk<br/>Telnyx DID must be imported into Vapi first"| telnyx
+  telnyx -->|"PSTN"| prospect
+  vapi -->|"POST /tools/* · header X-Vapi-Secret<br/>get_availability · book_job · send_packet · opt_out"| api
+  vapi -.->|"end-of-call-report<br/>needs POST /webhooks/vapi — NOT BUILT"| api
+  telnyx -.->|"call events · Ed25519 headers<br/>needs POST /webhooks/telnyx — NOT BUILT"| api
 
-- `contact.line_type` defaults to `unknown`, which `landline_only` refuses. `gateAndClaim` resolves it through the Telnyx carrier lookup and caches it on the contact for 90 days, mirroring the DNC cache beside it. A lookup failure rolls the transaction back and leaves the task `queued` rather than writing it off as blocked.
-- A `call_task` has to exist. `apollo.syncCampaign` creates them from a campaign's saved search — one task per (campaign, contact), enforced by a unique index, so re-runs are idempotent and re-attempts increment `attempt_no` on the same row.
+  worker -.->|"listEmployees · listJobs · getScheduleWindows · createJob<br/>every call throws not_implemented"| hcp
+  hcp -.->|"job.* webhooks · x-hcp-signature<br/>verifier throws not_implemented"| api
+  worker -->|"POST /users/{mailbox}/events<br/>private_key_jwt PS256 · transactionId"| msgraph
+  worker -->|"POST /emails · Bearer RESEND_API_KEY<br/>Idempotency-Key"| resend
+  worker -->|"POST /contacts/search · master APOLLO_API_KEY<br/>hourly · creates call_task rows"| apollo
+  worker -.->|"PutObject · presign · DeleteObject · SigV4<br/>mock until 4 R2 keys are set"| r2
+```
 
-## Row-level security on the agents schema
+**Per-vendor detail** — the wire format each real client speaks, the keys that flip it real, and the one constraint that will bite if forgotten:
 
-All 17 tables have RLS enabled and **no policies**, which is deliberate: no policy means no non-owner role can read or write a row, and these tables should never be reachable from a browser. Every table is owned by `postgres`, and a table owner bypasses RLS unless `FORCE ROW LEVEL SECURITY` is set, so the api and worker — which connect over the direct Postgres URL as that owner — are unaffected. The test suite proves it: 149 tests pass unchanged with RLS on.
+| Vendor | Goes `real` when all of these are set | Real client speaks | Idempotency | The constraint worth knowing |
+|---|---|---|---|---|
+| **telnyx** | `TELNYX_API_KEY` `TELNYX_CONNECTION_ID` `TELNYX_PUBLIC_KEY` | `GET /v2/number_lookup/{n}?type=carrier` · `POST /v2/calls` · Ed25519 verify over `timestamp\|rawBody` | `command_id = call_task_id`: Telnyx drops a repeated id, so a retried job cannot double-dial | `carrier.type` maps to `landline` **only** for `fixed line`. `fixed line or mobile`, toll-free and anything unrecognised become `unknown`, which `landline_only` refuses. All three keys are required *together* because the mock resolves most numbers to `landline` — a partial config would fail open. |
+| **vapi** | `VAPI_PRIVATE_KEY` `VAPI_WEBHOOK_SECRET` `VAPI_ASSISTANT_ID` | `POST /call` · `GET /call/{id}` · `GET /phone-number` | The job envelope's key; Vapi has none | Vapi addresses caller ID by **`phoneNumberId`**, not E.164, so the Telnyx DID must first be **imported into Vapi** as a BYO number. `resolvePhoneNumberId` throws `unknown_from_number` otherwise — non-retryable, no call placed. The call object has no metadata field; the correlation id rides in `name` (40-char cap). |
+| **dnc** | `DNC_API_KEY` | `GET /api/v1/check-1/` | n/a (read) | US-only — a non-`+1` number is refused, not reported clean. Returns a **federal** determination only; `state` is always `false`. State scrubbing is an open compliance gap. |
+| **graph** | `MS_TENANT_ID` `MS_CLIENT_ID` `MS_CLIENT_CERT_PEM` `MS_BOOKING_MAILBOX` | client-credential token, then `POST /users/{mailbox}/events` | Graph `transactionId = booking id` | `private_key_jwt` with PS256 and `x5t#S256`, so the PEM must hold **both** the `CERTIFICATE` and `PRIVATE KEY` blocks; `\n`-escaped form accepted because Railway cannot store newlines. Cert expires **2028-09-12**; nothing in this system watches for that. |
+| **resend** | `RESEND_API_KEY` `MAIL_FROM` | `POST /emails` | `Idempotency-Key` header, 24h, ≤256 chars | One `email_send` row per (booking, template); a re-run finds `status=sent` and stops before the vendor. |
+| **apollo** | `APOLLO_API_KEY` | `POST /contacts/search` · `POST /phone_calls` · `PATCH /accounts/{id}` | Job envelope only — Apollo offers no idempotency header | All three endpoints need a **master** key. `/phone_calls` takes its params as a **query string**, not a body. Saved searches are addressed as `contact_label_ids` and must be contact-modality lists. |
+| **r2** | `R2_ACCOUNT_ID` `R2_ACCESS_KEY_ID` `R2_SECRET_ACCESS_KEY` `R2_BUCKET` | S3 `PutObject` / presigned `GetObject` / `DeleteObject` | Object key | The only client not using `request()`: SigV4 needs `@aws-sdk/client-s3`, pinned to the fetch handler. Presigned URLs cap at 7 days. Recordings need their **own bucket** — see `docs/CREDENTIALS.md` § storage. |
+| **hcp** | `HCP_API_KEY` | **Nothing yet.** Five methods raise `not_implemented` | — | The key is verified (`GET /company` → 200 under both `Bearer` and `Token`; `scheduled_start_min/max` filters confirmed), so the client is **fully specified and unwritten**, not blocked. Until it exists, `real` mode is *worse* than mock — see §6. |
 
-Two things not to undo later:
+---
 
-- **Do not add a `service_role` policy.** Supabase's `rls_disabled` advisory suggests enabling RLS "with policies", but a policy here would *grant* access that does not currently exist. The intended state is deny-everything-except-the-owner.
-- **The grants are the real fence, and they came first.** `anon`, `authenticated`, `service_role` and `authenticator` hold no `USAGE` on the `agents` schema and no privilege on any table in it — verified, not assumed. Supabase's advisory describes tables "fully exposed to the anon key", which is the generic wording for a table in an exposed schema with the default grants; it does not hold for this schema. RLS is the second lock in case a future `GRANT` opens the first.
+## 3. Dial modes — the one switch that changes everything
 
-## Call flow
+`DIAL_MODE` is enforced in the telnyx and vapi **adapters**, not in the UI or the orchestrator (rule 5). The config loader gates the transitions; `assertDialAllowed()` gates each individual call.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> dry_run
+  dry_run --> verified_only : DIAL_MODE=verified_only
+  verified_only --> live : DIAL_MODE=live
+  live --> verified_only : roll back
+  verified_only --> dry_run : roll back
+
+  note left of dry_run
+    TODAY. Every adapter is a mock, whatever keys are set.
+    createOutboundCall returns a synthetic id; call.disposition = dry_run.
+    /health reports mode "mock" for all 8 vendors, so no credential
+    can be validated in this state.
+    The gate still runs for real against Postgres.
+    REDIS_URL optional: api runs jobs inline without it.
+  end note
+
+  note right of verified_only
+    Boot refuses unless all 7 DIAL_PATH_VENDOR_KEYS, REDIS_URL
+    and a non-empty DIAL_ALLOWLIST are present.
+    Each adapter goes real when its own keys are present,
+    otherwise stays mock and is named in a boot warning.
+    assertDialAllowed throws unless `to` is in DIAL_ALLOWLIST.
+    Real PSTN calls, to your own numbers only.
+  end note
+
+  note right of live
+    Same as verified_only without the allowlist.
+    The pre-dial gate is the only thing between a queued
+    call_task and a PSTN call.
+    Wireless refused unless COMPLIANCE_TARGET_SURFACE =
+    consented_mobile AND a grant consent_event exists.
+  end note
+```
+
+The seven dial-path keys are `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY`, `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`, `VAPI_ASSISTANT_ID`, `DNC_API_KEY`. Requiring only these — not all 25 — means a first test call does not depend on a Graph certificate or a Resend domain. Deepgram, ElevenLabs and the LLM are deliberately **not** in the list: no code here calls them; those keys live inside Vapi's own Provider Keys.
+
+---
+
+## 4. One dial, end to end — in what way things are connected
+
+The sequence below is a single `dial.claim` job. The grey box is one Postgres transaction: **`gate_result` is committed before any vendor is asked to dial** (rule 3), and a vendor lookup failure inside it rolls the whole thing back, leaving the task `queued` for retry rather than writing it off as `blocked`.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant S as scheduler<br/>dial.tick · 60s
+  participant W as worker<br/>dial.claim
+  participant PG as Postgres
+  participant D as DoNotCallDNC
+  participant T as Telnyx
+  participant V as Vapi
+  participant P as Prospect
+  participant A as api<br/>/tools/*
+
+  S->>W: one dial.claim per active campaign under daily cap
+  W->>PG: pickDid — least-loaded active DID under its cap
+  rect rgb(242,245,247)
+    Note over W,PG: ONE transaction. gate_result is committed before any vendor is asked to dial.
+    W->>PG: SELECT call_task … FOR UPDATE SKIP LOCKED
+    W->>D: lookup(phone) — only if dnc_checked_at older than 30d
+    W->>T: GET /number_lookup?type=carrier — only if line_type_checked_at older than 90d
+    W->>W: runGate: surface → suppression → DNC → calling window → DID cap → attempts
+    W->>PG: UPDATE call_task SET gate_result, status = claimed | blocked
+  end
+  alt gate_result ≠ pass
+    W-->>S: stop. dial.requeue re-queues window / did_cap blocks every 30m
+  else gate_result = pass
+    W->>V: assertDialAllowed(DIAL_MODE, to) — dry_run throws, verified_only needs the allowlist
+    W->>V: GET /phone-number — resolve DID E.164 → phoneNumberId (cached per process)
+    W->>V: POST /call {assistantId, phoneNumberId, customer.number, name = call_task_id}
+    W->>PG: INSERT call(vapi_call_id) · call_task.status = dialed
+    V->>T: originate over BYO SIP trunk
+    T->>P: PSTN ring
+    V->>P: firstMessage = SCRIPT_VERSION.disclosure_line, verbatim (rule 10)
+    loop conversation
+      V->>A: POST /tools/get_availability · X-Vapi-Secret · call.name = call_task_id
+      A->>PG: slots for the contact's service_address (Redis cache 15m)
+      A-->>V: options[] with slot_id · say
+      V->>A: POST /tools/book_job {slot_id}
+      A->>PG: createBooking → status pending_review (AUTO_BOOK = false)
+      A-->>V: booked · "the office will confirm by email"
+    end
+    V--xA: end-of-call-report — no route yet (Phase 5)
+  end
+```
+
+Three things in that sequence are load-bearing and easy to miss:
+
+1. **The gate runs six checks in a fixed order, first failure wins**: surface (line type × consent, plus the MA two-party-recording exclusion) → suppression → DNC → calling window → per-DID daily cap → attempt cap. It is a pure function (`runGate`) with no I/O, so every branch is unit-tested; `gateAndClaim` is the thin I/O wrapper around it.
+2. **`call_task` rows have to exist before any of this fires.** `apollo.syncCampaign` (hourly) creates them from a campaign's saved search, one per (campaign, contact), enforced by a unique index. No campaign with `apollo_saved_search_id` set and `status='active'` ⇒ the dialer idles forever with nothing to claim and no error.
+3. **The disclosure line is enforced by configuration, not at runtime.** Vapi's `firstMessage` is set to `SCRIPT_VERSION.disclosure_line` byte-for-byte, and the system prompt forbids re-introduction. `assertFirstUtterance()` exists in `packages/compliance` but **has no caller** — the runtime check belongs in the post-call pipeline (Phase 5) once transcripts arrive.
+
+---
+
+## 5. What can reach the api — every inbound surface and how it is authenticated
+
+```mermaid
+flowchart TB
+  classDef svc fill:#e2f0ef,stroke:#0e6d6a,color:#111
+  classDef ok fill:#fff,stroke:#4d7c3f,stroke-width:2px,color:#111
+  classDef gap fill:#fff,stroke:#a8501a,stroke-dasharray:5 3,color:#a8501a
+  classDef pub fill:#f9ece2,stroke:#a8501a,color:#111
+
+  api["api · Hono<br/>every route below is what can reach it"]:::svc
+
+  c1["console<br/>GET /campaigns · GET /bookings · POST /bookings/:id/review · GET /availability"]:::ok
+  c2["anyone<br/>GET /health"]:::pub
+  c3["prospect<br/>GET+POST /book/:token"]:::pub
+  v1["Vapi tool calls<br/>POST /tools/get_availability · book_job · send_packet · opt_out"]:::ok
+  v2["Vapi end-of-call-report<br/>POST /webhooks/vapi"]:::gap
+  t1["Telnyx call events<br/>POST /webhooks/telnyx"]:::gap
+  h1["Housecall Pro job.* webhooks<br/>POST /webhooks/hcp"]:::gap
+
+  c1 -->|"Bearer INTERNAL_API_TOKEN<br/>internalAuth · constant-time compare"| api
+  c2 -->|"no auth<br/>returns dial_mode + 8 vendor modes"| api
+  c3 -->|"contact.booking_token in the path<br/>one row per contact, no session"| api
+  v1 -->|"header X-Vapi-Secret = VAPI_WEBHOOK_SECRET<br/>vapiAuth · timingSafeEqual · raw body stashed<br/>ToolIdempotency: 24h Redis TTL per toolCall id"| api
+  v2 -.->|"same secret<br/>ROUTE NOT BUILT"| api
+  t1 -.->|"telnyx-signature-ed25519 + telnyx-timestamp<br/>telnyxWebhookOk() exists, has no caller<br/>ROUTE NOT BUILT"| api
+  h1 -.->|"x-hcp-signature<br/>route exists · verifier throws not_implemented<br/>so every real webhook 500s"| api
+```
+
+`/health` is public on purpose — it exposes mode, not secrets — and is what the console dashboard and Railway's healthcheck both read. `/tools/*` is the only surface a third party can drive; its secret is a value **we generate** and hand to Vapi, not one Vapi issues (`docs/CREDENTIALS.md`).
+
+---
+
+## 6. Booking → fulfillment — the write path after a "yes"
+
+There is exactly one way a booking gets created (`createBooking()`), whether the prospect says yes on the phone or clicks a slot on `/book/:token`. `AUTO_BOOK` is settled `false`, so every booking waits for a human before anything reaches Housecall Pro, the calendar or the prospect's inbox.
+
+```mermaid
+flowchart LR
+  classDef svc fill:#e2f0ef,stroke:#0e6d6a,color:#111
+  classDef ok fill:#fff,stroke:#4d7c3f,stroke-width:2px,color:#111
+  classDef gap fill:#fff,stroke:#a8501a,stroke-dasharray:5 3,color:#a8501a
+  classDef store fill:#f2f5f7,stroke:#6b788a,color:#111
+  classDef human fill:#f9ece2,stroke:#a8501a,color:#111
+
+  a["/tools/book_job<br/>from the call"]:::svc
+  b["POST /book/:token<br/>from the web page"]:::svc
+  cb["createBooking()<br/>one write path · idempotent on (contact, window_start)"]:::svc
+  bk[("booking<br/>status = pending_review")]:::store
+  rv(["Reviewer<br/>POST /bookings/:id/review"]):::human
+  ap[("booking<br/>status = approved")]:::store
+  ef["enqueueFulfillment()<br/>3 jobs · idempotency_key per (queue, booking)"]:::svc
+
+  q1["hcp.createJob<br/>→ booking.hcp_job_id · status = synced"]:::gap
+  q2["graph.createEvent<br/>→ calendar_invite · transactionId = booking id"]:::ok
+  q3["resend.sendPacket<br/>→ email_send · Idempotency-Key"]:::ok
+
+  a --> cb
+  b --> cb
+  cb --> bk
+  bk -->|"AUTO_BOOK = false · a human decides"| rv
+  rv -->|"approve"| ap
+  rv -->|"reject"| rj[("status = rejected")]:::store
+  ap --> ef
+  ef --> q1
+  ef --> q2
+  ef --> q3
+  q1 -.->|"real client not implemented<br/>fails 5× then lands in DLQ 'dead'"| dlq[("dead")]:::store
+  q2 --> gr["Graph · booking@ mailbox"]:::ok
+  q3 --> rs["Resend · prospect's inbox"]:::ok
+```
+
+The **slot handle is stateless**: `slot_id` is a 10-char hash of (technician, window_start). `book_job` recomputes the slots and matches, so a stale id from an earlier `get_availability` simply stops matching and the caller is offered what is still free — no slot table, no locks, no cleanup.
+
+---
+
+## 7. What changes when you leave `dry_run` — the honest version
+
+This is the section to read before flipping the switch. It is drawn from `useMock()`, the config loader, and what each adapter does in `real` mode today.
 
 ```mermaid
 flowchart TD
-  A["Apollo saved search"] --> B["call_task rows"]
-  B --> C{"Pre-dial gate (same txn)<br/>surface · suppression · DNC · window · DID cap · attempts"}
-  C -->|"blocked"| X["call_task.gate_result ≠ pass"]
-  C -->|"pass"| D["vapi adapter — enforces DIAL_MODE"]
-  D -->|"dry_run"| Y["call(disposition=dry_run)"]
-  D -->|"live / allowlisted"| E["Vapi session via Telnyx BYO SIP"]
-  E --> F["Fixed disclosure line (script_version)"]
-  F --> G{"Outcome"}
-  G -->|"books"| H["/tools/get_availability → /tools/book_job"]
-  H --> I["booking(pending_review) → human approve"]
-  I --> J["queues: hcp.createJob · graph.createEvent · resend.sendPacket"]
-  G -->|"opt out"| L["/tools/opt_out → suppression + consent_event(revoke)"]
-  G --> N["end-of-call webhook → postcall queue"]
-  N --> O["recording → R2 (retain 5y) · transcript · apollo.logCall with link in note"]
+  classDef now fill:#e2f0ef,stroke:#0e6d6a,color:#111
+  classDef ok fill:#fff,stroke:#4d7c3f,stroke-width:2px,color:#111
+  classDef warn fill:#f9ece2,stroke:#a8501a,color:#111
+  classDef gap fill:#fff,stroke:#a8501a,stroke-dasharray:5 3,color:#a8501a
+
+  A["Today: DIAL_MODE = dry_run<br/>20 of 25 vendor keys set · all 8 adapters mock"]:::now
+  A --> B{"set DIAL_MODE = verified_only<br/>+ DIAL_ALLOWLIST = your numbers"}
+  B --> C{"config loader<br/>7 dial-path keys + REDIS_URL present?"}
+  C -->|"no — DNC_API_KEY is unset today"| X["api and worker refuse to boot<br/>error names the missing key"]:::warn
+  C -->|"yes"| D["each adapter re-evaluates useMock() at boot"]
+
+  D --> E["telnyx · vapi · graph · resend · apollo<br/>→ real"]:::ok
+  D --> F["dnc → real"]:::ok
+  D --> G["r2 → still mock<br/>4 keys unset · named in boot warning"]:::warn
+  D --> H["hcp → 'real', but every method<br/>throws not_implemented"]:::gap
+
+  H --> H1["availability.materialize fails every 15 min → DLQ<br/>hcp.createJob fails after every approve → DLQ<br/>slot data freezes at the last mock materialization"]:::gap
+
+  E --> J{"first dial.claim with gate_result = pass"}
+  J --> K["vapi: GET /phone-number"]
+  K -->|"Telnyx DID not imported into Vapi<br/>(0 imported today)"| L["unknown_from_number<br/>non-retryable · no call placed"]:::warn
+  K -->|"imported"| M["real PSTN call<br/>to an allowlisted number only"]:::ok
+  M --> N["Vapi → /tools/* work end to end<br/>end-of-call-report has nowhere to land"]:::warn
 ```
 
-## Runtime topology
+**The change, item by item.** What flips automatically, what breaks, and what has to exist first:
 
-- **api** (`PORT` 8787): public `/health`, `/book/:token`, `/tools/*` (Vapi secret), `/webhooks/hcp`; internal (bearer `INTERNAL_API_TOKEN`) `/availability`, `/bookings`, `/campaigns`.
-- **worker**: 8 BullMQ queues, concurrency 1 on `dial`; schedulers `availability.materialize` (15 min), `retention.sweep` (daily), `dial.tick` (1 min). Requires `REDIS_URL`.
-- **console** (3000): server components call api with the internal token; the booking page is public and token-scoped. No DB access from the console.
-- **Local without Docker**: `DATABASE_URL=pglite:./.data/pglite` runs an embedded Postgres; without `REDIS_URL` the api runs its own jobs inline. Tests always use in-memory PGlite.
+| | Today (`dry_run`) | After the flip | Required first |
+|---|---|---|---|
+| **Config** | 20/25 keys set; loader accepts anything | Loader **refuses to boot** without the 7 dial-path keys + `REDIS_URL` (+ `DIAL_ALLOWLIST` for `verified_only`) | `DNC_API_KEY` — the one dial-path key still unset |
+| **telnyx / vapi / dnc** | mock | real | A **DID** purchased on Telnyx, **imported into Vapi** as a BYO number, with a matching `did` row — three separate steps, none of them a key |
+| **graph / resend / apollo** | mock | real | Nothing further |
+| **r2** | mock | still mock, named in the boot warning | 4 keys (in hand) and a bucket decision (`tm-call-recordings`, not `tm-os-1`) |
+| **hcp** | mock — returns the seed fixture, availability works | **`real` and broken**: `materialize` fails every 15 min, `createJob` fails after every approval, both land in `dead` after 5 attempts; slot data stops refreshing | The real HCP client. Fully specified against a verified key; the last unwritten adapter |
+| **`/health`** | `mock` for all 8, `ok:true` regardless | Per-vendor truth; a bad credential finally shows as `ok:false` | — |
+| **Telnyx call events** | nothing arrives | Telnyx POSTs to `/webhooks/telnyx` and gets **404** | The route — `telnyxWebhookOk()` is written and untested against a caller |
+| **Vapi end-of-call-report** | nothing arrives | Vapi POSTs to the server URL and gets **404**; no recording, no transcript, no `apollo.logCall` | `POST /webhooks/vapi` and the Phase 5 post-call pipeline (`postcall.process` is a stub) |
+| **Disclosure line** | enforced by Vapi config | same | Runtime check via `assertFirstUtterance()` over the transcript — has no caller until Phase 5 |
+| **Database rows** | seed fixture only | same rows drive real calls | `script_version` (active), `did`, `campaign` with `apollo_saved_search_id` + `status='active'`. `pnpm db:seed` has never run against TM1 |
+
+The rule that falls out of this table: **do not leave `dry_run` until the HCP client exists** — not because HCP is on the dial path (it is not), but because `real` HCP mode actively degrades a system that works fine on the mock. Everything else in the table is a missing thing; that one is a regression.
+
+---
+
+## 8. Data ownership — which component writes which table
+
+`docs/ERD.md` is generated from the schema and CI fails if the two drift. This is the ownership view: 17 tables in the `agents` schema, RLS enabled with **no policies** — intentionally. The api and worker connect as the table owner, which bypasses RLS; `anon`, `authenticated`, `service_role` and `authenticator` hold no `USAGE` on the schema and no privilege on any table (verified, not assumed). Do not add a `service_role` policy: it would *grant* access that does not exist today.
+
+| Feature | Components | Owns tables |
+|---|---|---|
+| Campaign & dial | worker `dial.tick` / `dial.claim` / `dial.requeue`, compliance gate, telnyx + vapi adapters | `campaign`, `call_task`, `call`, `did`, `script_version` |
+| Compliance | `packages/compliance`, dnc adapter, `/tools/opt_out` | `consent_event` (append-only), `suppression` (unique on `phone_e164`, never keyed on contact) |
+| Availability & booking | api availability service, booking routes, console `/book`, hcp adapter | `technician`, `schedule_block`, `service_address`, `booking` |
+| Fulfillment | worker `hcp.createJob` / `graph.createEvent` / `resend.sendPacket`, reviewer | `calendar_invite`, `email_send` |
+| Post-call (Phase 5) | worker `postcall.process` (stub), r2 adapter, `retention.sweep` | `recording` (`retain_until` ≥ 5y, DB check constraint), `transcript` |
+| CRM sync | apollo adapter, `apollo.syncCampaign` | `account`, `contact` |
+
+---
+
+## 9. Patterns — the only shapes allowed
+
+Before adding a component, extend one of these. Two components solving the same problem differently is a finding.
+
+| Pattern | Shape | Used by |
+|---|---|---|
+| Adapter | `{ name, mode, healthcheck() }` + typed methods; zod input; `AdapterError{vendor,code,retryable}`; `withRetry`; mock when a key is absent or `DIAL_MODE=dry_run` | all 8 vendors |
+| Vendor HTTP call | `request()` in `packages/adapters/src/base.ts`: query building, JSON encode/decode, 15s timeout, status → `AdapterError` (408/425/429/5xx and transport errors retryable), wrapped in `withRetry` | every real client except r2, which signs via the S3 SDK |
+| Job envelope | `{ entity_id, idempotency_key, attempt, enqueued_at }`; BullMQ `jobId = idempotency_key`; one retry policy (5 attempts, exponential from 30s); one DLQ (`dead`); `pnpm replay <queue> <job_id>` | every queue |
+| Processor registry | `REGISTRY[queue][jobName] → (ctx, payload)` in `apps/worker/src/registry.ts`, plus `SCHEDULES` for repeatables | every worker job |
+| Gate-then-act | `gateAndClaim()` writes `gate_result` in the claiming transaction; only `pass` reaches an adapter | dial orchestrator |
+| Materialize + invalidate | pull vendor state into a table on a schedule + webhook; serve from Redis with a 15-minute TTL | `schedule_block` / slots |
+| Token-per-contact public page | `contact.booking_token` → `/book/:token` | booking page |
+| One booking write path | `createBooking()` in `apps/api/src/booking-core.ts`, idempotent on (contact, window_start) | `/book/:token` and `book_job` |
+| Stateless slot handle | `slot_id` = short hash of (technician, window_start); recomputed on `book_job` | `get_availability` → `book_job` |
+| Idempotent write | unique `idempotency_key` column + `onConflictDoNothing` | `booking`, `email_send` |
+
+Worker schedules registered at boot: `dial.tick` 60s · `dial.requeue` 30m · `availability.materialize` 15m · `apollo.syncCampaign` 60m · `retention.sweep` 24h. Concurrency is 1 on `dial`, 4 everywhere else.
+
+---
+
+## 10. Status — one row per component, as of 2026-09-13
+
+| Layer | Component | Where | State |
+|---|---|---|---|
+| Front-end | Campaign console (dashboard) | `apps/console/app/page.tsx` | **Deployed.** Reads `/health`, `/campaigns`, pending `/bookings`. Review and Live pages are placeholders (Phases 4/6) |
+| Front-end | Self-schedule page `/book/[token]` | `apps/console/app/book` | **Deployed.** Calls the public booking routes |
+| Middleware | Tool API `/tools/*` | `apps/api/src/routes/tools.ts` | **Built and wired**: 4 Vapi function tools point at it with the shared secret |
+| Middleware | Booking API, review, availability, health | `apps/api/src/routes/*` | **Built** |
+| Middleware | Webhooks | `apps/api/src/routes/webhooks.ts` | `/hcp` exists (verifier unimplemented); **`/telnyx` and `/vapi` do not exist** |
+| Middleware | Dial orchestrator, campaign ingest, requeue, fulfillment | `apps/worker/src/processors` | **Built.** `postcall.process` and `apollo.logCall` are stubs |
+| Middleware | Pre-dial gate, suppression, consent ledger, calling windows | `packages/compliance` | **Built.** `assertFirstUtterance` has no caller |
+| Middleware | Vendor adapters | `packages/adapters` | 7 of 8 real clients written; **hcp is `not_implemented`** |
+| Middleware | Config loader, logger, errors, job envelope | `packages/shared` | **Built.** Blank Railway variables read as unset |
+| Back-end | Postgres schema, 4 migrations, seed | `packages/db` | **Migrated on TM1.** Seed never run against it |
+| Back-end | Redis | Railway plugin | **Running** |
+| Infra | Railway (api, worker, console) | `apps/*/Dockerfile` | **Deployed**, `api-production-d51a` / `console-production-e58c` |
+| Infra | CI | `.github/workflows/ci.yml` | typecheck · lint · **167 tests** · ERD check · build, on push to `main` and every PR |
+| Vendor | Vapi | — | Assistant `db67c732` *TM Voice - Atlanta PM v1*, 4 tools, ElevenLabs voice. **0 phone numbers imported** |
+| Vendor | Telnyx | — | App `tm-voice-production` (`3047698443645487069`), API v2, Call Cost on. **0 DIDs, balance $5, KYC pending** |
+| Vendor | Microsoft Graph | — | Certificate set and uploaded to Entra; expires 2028-09-12 |
+| Vendor | Housecall Pro | — | Key verified; client unwritten |
+| Vendor | Cloudflare R2 | — | Keys minted; bucket and account ownership open (`docs/CREDENTIALS.md`) |
+| Vendor | DoNotCallDNC | — | No key. **The last dial-path blocker** |
