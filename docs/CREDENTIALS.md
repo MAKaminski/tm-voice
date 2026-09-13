@@ -72,7 +72,7 @@ General Settings; the assistant-level value overrides it.
 
 | Variable | Exact path | Notes |
 |---|---|---|
-| `HCP_API_KEY` | <https://pro.housecallpro.com/pro/settings/api> | Verified working: `GET /company` returns 200 under **both** `Bearer` and `Token`. Also subscribe `job.scheduled`, `job.completed`, `customer.updated`, `pro.created` → `https://<api-domain>/webhooks/hcp`. |
+| `HCP_API_KEY` | <https://pro.housecallpro.com/pro/settings/api> | Verified working: `GET /company` returns 200 under **both** `Bearer` and `Token`; the client uses Bearer. Subscribing `job.scheduled`, `job.completed`, `customer.updated`, `pro.created` → `https://<api-domain>/webhooks/hcp` is optional: the route fails closed until a webhook signing secret is configured (none is yet — the header is reported second-hand as `x-housecallpro-signature`), and the 15-minute materializer keeps availability fresh without it. |
 | `APOLLO_API_KEY` | <https://app.apollo.io/#/settings/integrations/api> | Must be a **master** key — `/accounts/search`, `/phone_calls` and `/contacts/search` all refuse a non-master key. Check with `GET /auth/health`. |
 | `DNC_API_KEY` | <https://www.donotcalldnc.com/> → buy a lookup block → API key | **Not required while `DNC_SCRUB=off`** — the loader drops it from the dial-path keys and the gate makes no lookup (cached hits still block). Set `DNC_SCRUB=required` the day a block is bought. Federal determination only; state scrubbing is an open gap (`docs/COMPLIANCE.md`). |
 | `RESEND_API_KEY`, `MAIL_FROM` | <https://resend.com/api-keys> · <https://resend.com/domains> | Domain `mail.transparentmaintenance.com`; key scoped `sending_access` to it. |

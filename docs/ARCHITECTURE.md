@@ -89,7 +89,7 @@ flowchart LR
   end
 
   subgraph fulfil["Fulfillment"]
-    hcp["Housecall Pro<br/>key set · real client NOT IMPLEMENTED"]:::gap
+    hcp["Housecall Pro<br/>key set · client built, reads verified live"]:::real
     msgraph["Microsoft Graph<br/>keys: 4 of 4 set · cert to 2028-09-12"]:::real
     resend["Resend<br/>keys: 2 of 2 set"]:::real
   end
@@ -108,8 +108,8 @@ flowchart LR
   vapi -.->|"end-of-call-report<br/>needs POST /webhooks/vapi — NOT BUILT"| api
   telnyx -.->|"call events · Ed25519 headers<br/>needs POST /webhooks/telnyx — NOT BUILT"| api
 
-  worker -.->|"listEmployees · listJobs · getScheduleWindows · createJob<br/>every call throws not_implemented"| hcp
-  hcp -.->|"job.* webhooks · x-hcp-signature<br/>verifier throws not_implemented"| api
+  worker -->|"GET /employees · GET /jobs?scheduled_start_min/max · GET /company/schedule_availability<br/>POST /jobs · Bearer HCP_API_KEY · tm-voice:&lt;id&gt; tag"| hcp
+  hcp -.->|"job.* webhooks · x-housecallpro-signature<br/>no signing secret yet — route answers 401"| api
   worker -->|"POST /users/{mailbox}/events<br/>private_key_jwt PS256 · transactionId"| msgraph
   worker -->|"POST /emails · Bearer RESEND_API_KEY<br/>Idempotency-Key"| resend
   worker -->|"POST /contacts/search · master APOLLO_API_KEY<br/>hourly · creates call_task rows"| apollo
@@ -127,7 +127,7 @@ flowchart LR
 | **resend** | `RESEND_API_KEY` `MAIL_FROM` | `POST /emails` | `Idempotency-Key` header, 24h, ≤256 chars | One `email_send` row per (booking, template); a re-run finds `status=sent` and stops before the vendor. |
 | **apollo** | `APOLLO_API_KEY` | `POST /contacts/search` · `POST /phone_calls` · `PATCH /accounts/{id}` | Job envelope only — Apollo offers no idempotency header | All three endpoints need a **master** key. `/phone_calls` takes its params as a **query string**, not a body. Saved searches are addressed as `contact_label_ids` and must be contact-modality lists. |
 | **r2** | `R2_ACCOUNT_ID` `R2_ACCESS_KEY_ID` `R2_SECRET_ACCESS_KEY` `R2_BUCKET` | S3 `PutObject` / presigned `GetObject` / `DeleteObject` | Object key | The only client not using `request()`: SigV4 needs `@aws-sdk/client-s3`, pinned to the fetch handler. Presigned URLs cap at 7 days. Recordings need their **own bucket** — see `docs/CREDENTIALS.md` § storage. |
-| **hcp** | `HCP_API_KEY` | **Nothing yet.** Five methods raise `not_implemented` | — | The key is verified (`GET /company` → 200 under both `Bearer` and `Token`; `scheduled_start_min/max` filters confirmed), so the client is **fully specified and unwritten**, not blocked. Until it exists, `real` mode is *worse* than mock — see §6. |
+| **hcp** | `HCP_API_KEY` | `GET /employees` · `GET /jobs?scheduled_start_min&scheduled_start_max` · `GET /company/schedule_availability` · `POST /jobs`, all paged at 200 | `tm-voice:<booking id>` **tag** on the job; before creating, the client scans ±1 day around `scheduled_start` for a job already carrying it | Every read shape was taken from the live API, not docs — envelope `{page, page_size, total_pages, total_items, <collection>}`, `schedule.{scheduled_start, scheduled_end, arrival_window}`, `assigned_employees[].id`, `address.{latitude, longitude}`. Canceled (`work_status` *pro canceled*, `canceled_at`) and deleted jobs are dropped so they never block a technician. `POST /jobs` mirrors those field names and **cannot be verified without creating a job in the production field system**; a wrong field fails as a vendor 4xx, never silently. Every job needs a `customer_id` — no `account.hcp_customer_id`, no job. Webhook verification has no signing secret yet, so `/webhooks/hcp` fails closed (401) and the 15-minute materializer carries freshness. |
 
 ---
 
@@ -256,7 +256,7 @@ flowchart TB
   v1 -->|"header X-Vapi-Secret = VAPI_WEBHOOK_SECRET<br/>vapiAuth · timingSafeEqual · raw body stashed<br/>ToolIdempotency: 24h Redis TTL per toolCall id"| api
   v2 -.->|"same secret<br/>ROUTE NOT BUILT"| api
   t1 -.->|"telnyx-signature-ed25519 + telnyx-timestamp<br/>telnyxWebhookOk() exists, has no caller<br/>ROUTE NOT BUILT"| api
-  h1 -.->|"x-hcp-signature<br/>route exists · verifier throws not_implemented<br/>so every real webhook 500s"| api
+  h1 -.->|"x-housecallpro-signature<br/>route exists · no signing secret configured<br/>fails closed with 401"| api
 ```
 
 `/health` is public on purpose — it exposes mode, not secrets — and is what the console dashboard and Railway's healthcheck both read. `/tools/*` is the only surface a third party can drive; its secret is a value **we generate** and hand to Vapi, not one Vapi issues (`docs/CREDENTIALS.md`).
@@ -283,7 +283,7 @@ flowchart LR
   ap[("booking<br/>status = approved")]:::store
   ef["enqueueFulfillment()<br/>3 jobs · idempotency_key per (queue, booking)"]:::svc
 
-  q1["hcp.createJob<br/>→ booking.hcp_job_id · status = synced"]:::gap
+  q1["hcp.createJob<br/>→ booking.hcp_job_id · status = synced"]:::ok
   q2["graph.createEvent<br/>→ calendar_invite · transactionId = booking id"]:::ok
   q3["resend.sendPacket<br/>→ email_send · Idempotency-Key"]:::ok
 
@@ -297,7 +297,7 @@ flowchart LR
   ef --> q1
   ef --> q2
   ef --> q3
-  q1 -.->|"real client not implemented<br/>fails 5× then lands in DLQ 'dead'"| dlq[("dead")]:::store
+  q1 --> hc["HCP · job tagged tm-voice:&lt;booking id&gt;"]:::ok
   q2 --> gr["Graph · booking@ mailbox"]:::ok
   q3 --> rs["Resend · prospect's inbox"]:::ok
 ```
@@ -326,9 +326,7 @@ flowchart TD
   D --> E["telnyx · vapi · graph · resend · apollo<br/>→ real"]:::ok
   D --> F["dnc → stays mock, never called<br/>DNC_SCRUB = off · cached hits still block"]:::warn
   D --> G["r2 → still mock<br/>4 keys unset · named in boot warning"]:::warn
-  D --> H["hcp → 'real', but every method<br/>throws not_implemented"]:::gap
-
-  H --> H1["availability.materialize fails every 15 min → DLQ<br/>hcp.createJob fails after every approve → DLQ<br/>slot data freezes at the last mock materialization"]:::gap
+  D --> H["hcp → real<br/>reads verified live · createJob needs account.hcp_customer_id"]:::ok
 
   E --> J{"first dial.claim with gate_result = pass"}
   J --> K["vapi: GET /phone-number"]
@@ -346,14 +344,14 @@ flowchart TD
 | **telnyx / vapi** | mock | real | A **DID** purchased on Telnyx, **imported into Vapi** as a BYO number, with a matching `did` row — three separate steps, none of them a key |
 | **graph / resend / apollo** | mock | real | Nothing further |
 | **r2** | mock | still mock, named in the boot warning | 4 keys (in hand) and a bucket decision (`tm-call-recordings`, not `tm-os-1`) |
-| **hcp** | mock — returns the seed fixture, availability works | **`real` and broken**: `materialize` fails every 15 min, `createJob` fails after every approval, both land in `dead` after 5 attempts; slot data stops refreshing | The real HCP client. Fully specified against a verified key; the last unwritten adapter |
+| **hcp** | mock — returns the seed fixture | real: `materialize` pulls the 8 real technicians, their jobs and the company windows every 15 min; `createJob` writes back after approval | `account.hcp_customer_id` on the account being booked — without it `createJob` refuses with `customer_required` rather than guessing a customer |
 | **`/health`** | `mock` for all 8, `ok:true` regardless | Per-vendor truth; a bad credential finally shows as `ok:false` | — |
 | **Telnyx call events** | nothing arrives | Telnyx POSTs to `/webhooks/telnyx` and gets **404** | The route — `telnyxWebhookOk()` is written and untested against a caller |
 | **Vapi end-of-call-report** | nothing arrives | Vapi POSTs to the server URL and gets **404**; no recording, no transcript, no `apollo.logCall` | `POST /webhooks/vapi` and the Phase 5 post-call pipeline (`postcall.process` is a stub) |
 | **Disclosure line** | enforced by Vapi config | same | Runtime check via `assertFirstUtterance()` over the transcript — has no caller until Phase 5 |
 | **Database rows** | seed fixture only | same rows drive real calls | `script_version` (active), `did`, `campaign` with `apollo_saved_search_id` + `status='active'`. `pnpm db:seed` has never run against TM1 |
 
-The rule that falls out of this table: **do not leave `dry_run` until the HCP client exists** — not because HCP is on the dial path (it is not), but because `real` HCP mode actively degrades a system that works fine on the mock. Everything else in the table is a missing thing; that one is a regression.
+Every row in this table is now a *missing thing* rather than a regression: the HCP client that used to turn `real` mode into a 15-minute failure loop is written and its reads are verified against the live account. The remaining code gaps — the two webhook routes and the Phase 5 post-call pipeline — degrade nothing that works today.
 
 ---
 
@@ -401,18 +399,18 @@ Worker schedules registered at boot: `dial.tick` 60s · `dial.requeue` 30m · `a
 | Front-end | Self-schedule page `/book/[token]` | `apps/console/app/book` | **Deployed.** Calls the public booking routes |
 | Middleware | Tool API `/tools/*` | `apps/api/src/routes/tools.ts` | **Built and wired**: 4 Vapi function tools point at it with the shared secret |
 | Middleware | Booking API, review, availability, health | `apps/api/src/routes/*` | **Built** |
-| Middleware | Webhooks | `apps/api/src/routes/webhooks.ts` | `/hcp` exists (verifier unimplemented); **`/telnyx` and `/vapi` do not exist** |
+| Middleware | Webhooks | `apps/api/src/routes/webhooks.ts` | `/hcp` exists and fails closed until a signing secret is configured; **`/telnyx` and `/vapi` do not exist** |
 | Middleware | Dial orchestrator, campaign ingest, requeue, fulfillment | `apps/worker/src/processors` | **Built.** `postcall.process` and `apollo.logCall` are stubs |
 | Middleware | Pre-dial gate, suppression, consent ledger, calling windows | `packages/compliance` | **Built.** `assertFirstUtterance` has no caller |
-| Middleware | Vendor adapters | `packages/adapters` | 7 of 8 real clients written; **hcp is `not_implemented`** |
+| Middleware | Vendor adapters | `packages/adapters` | **8 of 8 real clients written.** hcp reads verified live; `POST /jobs` body mirrors HCP's own field names, unverified until the first real approval |
 | Middleware | Config loader, logger, errors, job envelope | `packages/shared` | **Built.** Blank Railway variables read as unset |
 | Back-end | Postgres schema, 4 migrations, seed | `packages/db` | **Migrated on TM1.** Seed never run against it |
 | Back-end | Redis | Railway plugin | **Running** |
 | Infra | Railway (api, worker, console) | `apps/*/Dockerfile` | **Deployed**, `api-production-d51a` / `console-production-e58c` |
-| Infra | CI | `.github/workflows/ci.yml` | typecheck · lint · **167 tests** · ERD check · build, on push to `main` and every PR |
+| Infra | CI | `.github/workflows/ci.yml` | typecheck · lint · **183 tests** · ERD check · build, on push to `main` and every PR |
 | Vendor | Vapi | — | Assistant `db67c732` *TM Voice - Atlanta PM v1*, 4 tools, ElevenLabs voice. **0 phone numbers imported** |
 | Vendor | Telnyx | — | App `tm-voice-production` (`3047698443645487069`), API v2, Call Cost on. **0 DIDs, balance $5, KYC pending** |
 | Vendor | Microsoft Graph | — | Certificate set and uploaded to Entra; expires 2028-09-12 |
-| Vendor | Housecall Pro | — | Key verified; client unwritten |
+| Vendor | Housecall Pro | — | Client built. 8 employees, company windows Mon–Fri 08:00–16:00, jobs paged at 200. Webhook signing secret not yet configured |
 | Vendor | Cloudflare R2 | — | Keys minted; bucket and account ownership open (`docs/CREDENTIALS.md`) |
 | Vendor | DoNotCallDNC | — | No key; **bypassed by `DNC_SCRUB=off`** (compliance decision, `docs/COMPLIANCE.md`). No dial-path key remains unset |
