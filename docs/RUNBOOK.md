@@ -87,13 +87,13 @@ Procedure and per-vendor rotation URLs: **`docs/CREDENTIALS.md` § Rotation**. A
 
 ## 6. Go-live flip (nothing in code changes)
 
-1. Telnyx Verified; DIDs registered; DoNotCallDNC funded; counsel sign-off (see `docs/COMPLIANCE.md`).
+1. Telnyx Verified; DIDs registered; DoNotCallDNC funded **or `DNC_SCRUB=off` recorded as a counsel-reviewed decision** (see `docs/COMPLIANCE.md` § DNC scrub flag); counsel sign-off.
 2. Cards on Vapi, Deepgram, Railway Hobby, Resend Pro, ElevenLabs Starter; LLM auto-reload at $50.
 3. Rotate every trial-era key once.
 4. `DIAL_MODE=verified_only`, `DIAL_ALLOWLIST=<your own numbers>` → place test calls (Phase 5).
    Only the dial-path keys are required to leave `dry_run`: `TELNYX_API_KEY`,
    `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY`, `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`,
-   `VAPI_ASSISTANT_ID`, `DNC_API_KEY`. Every other vendor stays mocked and is listed in a boot
+   `VAPI_ASSISTANT_ID`, `DNC_API_KEY` (dropped from the set when `DNC_SCRUB=off`). Every other vendor stays mocked and is listed in a boot
    warning plus `/health`. Deepgram, ElevenLabs and the LLM are configured inside Vapi's own
    Provider Keys, not here. Prerequisites in the database before a campaign can run:
    a `SCRIPT_VERSION` row (`campaign.script_version_id` is NOT NULL), a `DID` row for the number

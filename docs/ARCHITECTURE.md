@@ -85,7 +85,7 @@ flowchart LR
   subgraph dialpath["Dial path — the 7 DIAL_PATH_VENDOR_KEYS"]
     vapi["Vapi<br/>assistant db67c732 · 4 tools<br/>keys: 3 of 3 set"]:::real
     telnyx["Telnyx<br/>app tm-voice-production<br/>keys: 3 of 3 set · DID: none yet"]:::partial
-    dnc["DoNotCallDNC<br/>keys: 0 of 1 set"]:::partial
+    dnc["DoNotCallDNC<br/>keys: 0 of 1 · DNC_SCRUB = off<br/>never called"]:::partial
   end
 
   subgraph fulfil["Fulfillment"]
@@ -171,7 +171,7 @@ stateDiagram-v2
   end note
 ```
 
-The seven dial-path keys are `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY`, `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`, `VAPI_ASSISTANT_ID`, `DNC_API_KEY`. Requiring only these — not all 25 — means a first test call does not depend on a Graph certificate or a Resend domain. Deepgram, ElevenLabs and the LLM are deliberately **not** in the list: no code here calls them; those keys live inside Vapi's own Provider Keys.
+The seven dial-path keys are `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY`, `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`, `VAPI_ASSISTANT_ID`, `DNC_API_KEY`. Requiring only these — not all 25 — means a first test call does not depend on a Graph certificate or a Resend domain. **`DNC_SCRUB=off` drops `DNC_API_KEY` from that set** (`requiredDialPathKeys()`): the gate then makes no registry lookup, but a hit already cached on a contact still blocks. It is a compliance decision — see `docs/COMPLIANCE.md` — and is logged at boot, reported by `/health` as `dnc_scrub`, and shown as a red pill on the console. Deepgram, ElevenLabs and the LLM are deliberately **not** in the list: no code here calls them; those keys live inside Vapi's own Provider Keys.
 
 ---
 
@@ -317,14 +317,14 @@ flowchart TD
   classDef warn fill:#f9ece2,stroke:#a8501a,color:#111
   classDef gap fill:#fff,stroke:#a8501a,stroke-dasharray:5 3,color:#a8501a
 
-  A["Today: DIAL_MODE = dry_run<br/>20 of 25 vendor keys set · all 8 adapters mock"]:::now
+  A["Today: DIAL_MODE = dry_run · DNC_SCRUB = off<br/>20 of 25 vendor keys set · all 8 adapters mock"]:::now
   A --> B{"set DIAL_MODE = verified_only<br/>+ DIAL_ALLOWLIST = your numbers"}
-  B --> C{"config loader<br/>7 dial-path keys + REDIS_URL present?"}
-  C -->|"no — DNC_API_KEY is unset today"| X["api and worker refuse to boot<br/>error names the missing key"]:::warn
+  B --> C{"config loader<br/>6 dial-path keys (DNC dropped by the flag) + REDIS_URL present?"}
+  C -->|"no"| X["api and worker refuse to boot<br/>error names the missing key"]:::warn
   C -->|"yes"| D["each adapter re-evaluates useMock() at boot"]
 
   D --> E["telnyx · vapi · graph · resend · apollo<br/>→ real"]:::ok
-  D --> F["dnc → real"]:::ok
+  D --> F["dnc → stays mock, never called<br/>DNC_SCRUB = off · cached hits still block"]:::warn
   D --> G["r2 → still mock<br/>4 keys unset · named in boot warning"]:::warn
   D --> H["hcp → 'real', but every method<br/>throws not_implemented"]:::gap
 
@@ -341,8 +341,9 @@ flowchart TD
 
 | | Today (`dry_run`) | After the flip | Required first |
 |---|---|---|---|
-| **Config** | 20/25 keys set; loader accepts anything | Loader **refuses to boot** without the 7 dial-path keys + `REDIS_URL` (+ `DIAL_ALLOWLIST` for `verified_only`) | `DNC_API_KEY` — the one dial-path key still unset |
-| **telnyx / vapi / dnc** | mock | real | A **DID** purchased on Telnyx, **imported into Vapi** as a BYO number, with a matching `did` row — three separate steps, none of them a key |
+| **Config** | 20/25 keys set; loader accepts anything | Loader **refuses to boot** without the dial-path keys + `REDIS_URL` (+ `DIAL_ALLOWLIST` for `verified_only`). With `DNC_SCRUB=off` that is **6** keys, all set | Nothing — every required key is present |
+| **dnc** | mock, consulted on every claim | **never consulted** (`DNC_SCRUB=off`); cached hits still block; `warn` at boot; red pill on the console | A DoNotCallDNC block, when the decision is reversed: set the key and `DNC_SCRUB=required` |
+| **telnyx / vapi** | mock | real | A **DID** purchased on Telnyx, **imported into Vapi** as a BYO number, with a matching `did` row — three separate steps, none of them a key |
 | **graph / resend / apollo** | mock | real | Nothing further |
 | **r2** | mock | still mock, named in the boot warning | 4 keys (in hand) and a bucket decision (`tm-call-recordings`, not `tm-os-1`) |
 | **hcp** | mock — returns the seed fixture, availability works | **`real` and broken**: `materialize` fails every 15 min, `createJob` fails after every approval, both land in `dead` after 5 attempts; slot data stops refreshing | The real HCP client. Fully specified against a verified key; the last unwritten adapter |
@@ -414,4 +415,4 @@ Worker schedules registered at boot: `dial.tick` 60s · `dial.requeue` 30m · `a
 | Vendor | Microsoft Graph | — | Certificate set and uploaded to Entra; expires 2028-09-12 |
 | Vendor | Housecall Pro | — | Key verified; client unwritten |
 | Vendor | Cloudflare R2 | — | Keys minted; bucket and account ownership open (`docs/CREDENTIALS.md`) |
-| Vendor | DoNotCallDNC | — | No key. **The last dial-path blocker** |
+| Vendor | DoNotCallDNC | — | No key; **bypassed by `DNC_SCRUB=off`** (compliance decision, `docs/COMPLIANCE.md`). No dial-path key remains unset |

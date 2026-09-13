@@ -21,6 +21,8 @@ serve({ fetch: app.fetch, port: cfg.PORT }, (info) => logger.info({ port: info.p
 /** A vendor left on fixtures outside dry_run is a configuration gap, not a mode. Say so loudly. */
 function warnIfMocked(c: typeof cfg, a: typeof adapters) {
   if (c.DIAL_MODE === "dry_run") return;
-  const mocked = mockedVendors(a);
+  // dnc is intentionally unused when the scrub is off, so it is not a gap worth listing twice.
+  const mocked = mockedVendors(a).filter((v) => !(v === "dnc" && c.DNC_SCRUB === "off"));
   if (mocked.length) logger.warn({ dial_mode: c.DIAL_MODE, mocked }, "vendors still answering with mock fixtures outside dry_run");
+  if (c.DNC_SCRUB === "off") logger.warn({ dial_mode: c.DIAL_MODE }, "DNC_SCRUB=off: numbers are dialed without a registry lookup; only hits already cached on the contact block");
 }

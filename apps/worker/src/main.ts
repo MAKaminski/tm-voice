@@ -14,8 +14,9 @@ const adapters = createAdapters(cfg);
 const ctx: Ctx = { cfg, db, adapters, producer: createProducer(cfg.REDIS_URL) };
 // A vendor left on fixtures outside dry_run is a configuration gap, not a mode. Say so loudly.
 if (cfg.DIAL_MODE !== "dry_run") {
-  const mocked = mockedVendors(adapters);
+  const mocked = mockedVendors(adapters).filter((v) => !(v === "dnc" && cfg.DNC_SCRUB === "off"));
   if (mocked.length) logger.warn({ dial_mode: cfg.DIAL_MODE, mocked }, "vendors still answering with mock fixtures outside dry_run");
+  if (cfg.DNC_SCRUB === "off") logger.warn({ dial_mode: cfg.DIAL_MODE }, "DNC_SCRUB=off: numbers are dialed without a registry lookup; only hits already cached on the contact block");
 }
 const dlq = new Queue(DLQ_NAME, { connection });
 
