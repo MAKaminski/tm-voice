@@ -67,7 +67,7 @@ there disagree, `docs/CREDENTIALS.md` wins.
 
 | # | Variable(s) | Get it here | Notes |
 |---|---|---|---|
-| 1 | `HCP_API_KEY` | https://pro.housecallpro.com/pro/settings/api | Also subscribe webhooks `job.scheduled`, `job.completed`, `customer.updated`, `pro.created` → `https://<api-domain>/webhooks/hcp`. Confirm auth scheme (`Bearer` vs `Token`) — `/health` reports which works. |
+| 1 | `HCP_API_KEY` | https://pro.housecallpro.com/pro/settings/api | Set and verified (Bearer). Webhooks are optional until a signing secret exists — see `docs/CREDENTIALS.md`. Each account you want the agent to book for needs `account.hcp_customer_id`; `createJob` refuses without it. |
 | 2 | `APOLLO_API_KEY` | https://app.apollo.io/#/settings/integrations/api | Master key. |
 | 3 | `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY` | https://portal.telnyx.com/#/app/api-keys · https://portal.telnyx.com/#/app/next/call-control/applications · https://portal.telnyx.com/#/app/account/public-key | `TELNYX_CONNECTION_ID` is the **Application ID** of a Voice API Application, *not* a SIP Connection — `#/app/connections` is the wrong page. $10 top-up; KYC → Verified (Account Settings → Account Level); buy first DID at https://portal.telnyx.com/#/app/numbers/search-numbers and submit to https://www.freecallerregistry.com/fcr/ |
 | 4 | `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`, `VAPI_ASSISTANT_ID` | https://dashboard.vapi.ai/org/api-keys · **you invent the secret** · https://dashboard.vapi.ai/assistants | `VAPI_WEBHOOK_SECRET` is not on any page: generate a string, put it in a Vapi *Bearer Token* Custom Credential selected under Assistant → Advanced → Webhook Server → Authorization, and paste the same string here. Vapi sends it as `X-Vapi-Secret`. The assistant's `firstMessage` must equal `SCRIPT_VERSION.disclosure_line` — the seeded *Riley* demo assistant does not. Server URL = `https://<api-domain>/tools`. BYO keys for Deepgram/ElevenLabs/LLM under Provider Keys. |
@@ -87,13 +87,13 @@ Procedure and per-vendor rotation URLs: **`docs/CREDENTIALS.md` § Rotation**. A
 
 ## 6. Go-live flip (nothing in code changes)
 
-1. Telnyx Verified; DIDs registered; DoNotCallDNC funded; counsel sign-off (see `docs/COMPLIANCE.md`).
+1. Telnyx Verified; DIDs registered; DoNotCallDNC funded **or `DNC_SCRUB=off` recorded as a counsel-reviewed decision** (see `docs/COMPLIANCE.md` § DNC scrub flag); counsel sign-off.
 2. Cards on Vapi, Deepgram, Railway Hobby, Resend Pro, ElevenLabs Starter; LLM auto-reload at $50.
 3. Rotate every trial-era key once.
 4. `DIAL_MODE=verified_only`, `DIAL_ALLOWLIST=<your own numbers>` → place test calls (Phase 5).
    Only the dial-path keys are required to leave `dry_run`: `TELNYX_API_KEY`,
    `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY`, `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`,
-   `VAPI_ASSISTANT_ID`, `DNC_API_KEY`. Every other vendor stays mocked and is listed in a boot
+   `VAPI_ASSISTANT_ID`, `DNC_API_KEY` (dropped from the set when `DNC_SCRUB=off`). Every other vendor stays mocked and is listed in a boot
    warning plus `/health`. Deepgram, ElevenLabs and the LLM are configured inside Vapi's own
    Provider Keys, not here. Prerequisites in the database before a campaign can run:
    a `SCRIPT_VERSION` row (`campaign.script_version_id` is NOT NULL), a `DID` row for the number

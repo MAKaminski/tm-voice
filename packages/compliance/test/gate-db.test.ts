@@ -91,3 +91,52 @@ describe("consent + suppression", () => {
     expect((await claimFor(SEED.phones.wirelessGa))?.outcome.result).toBe("suppressed");
   });
 });
+
+describe("DNC_SCRUB=off", () => {
+  // Own database: the describes above leave dnc_checked_at set on most seed contacts.
+  let t2: Awaited<ReturnType<typeof createTestDb>>;
+  let r2: Awaited<ReturnType<typeof seed>>;
+  const off = { ...cfg, DNC_SCRUB: "off" as const };
+  const a2 = createAdapters(cfg);
+  const dncCalls = () => a2.dnc.mock?.calls.length ?? 0;
+  const only = async (phone: string) => {
+    const id = r2.contacts.find((c) => c.phoneE164 === phone)!.id;
+    await t2.db.update(callTask).set({ earliestDialAt: new Date("2099-01-01") }).where(eq(callTask.status, "queued"));
+    await t2.db.update(callTask).set({ status: "queued", gateResult: null, earliestDialAt: new Date("2026-01-01") }).where(eq(callTask.contactId, id));
+    return id;
+  };
+  beforeAll(async () => { t2 = await createTestDb(); r2 = await seed(t2.db, { day: new Date("2026-09-11T00:00:00Z") }); });
+  afterAll(() => t2.close());
+
+  it("never consults the vendor, and a never-checked number passes even though the registry would flag it", async () => {
+    // landlineCt is in MOCK_DNC_NUMBERS (added above), so with the scrub on this would gate as 'dnc'.
+    const id = await only(SEED.phones.landlineCt);
+    const before = dncCalls();
+    const res = await gateAndClaim(t2.db, a2, off, { didId: r2.did.id, now: NOON });
+    expect(res?.outcome.result).toBe("pass");
+    expect(dncCalls()).toBe(before);
+    const [c] = await t2.db.select().from(contact).where(eq(contact.id, id));
+    expect(c?.dncCheckedAt).toBeNull(); // nothing was looked up, so nothing was cached
+  });
+  it("a hit already cached on the contact still blocks — off removes the lookup, not the knowledge", async () => {
+    const id = await only(SEED.phones.landlineCt);
+    await t2.db.update(contact).set({ dncFederal: true, dncCheckedAt: NOON }).where(eq(contact.id, id));
+    const before = dncCalls();
+    const res = await gateAndClaim(t2.db, a2, off, { didId: r2.did.id, now: NOON });
+    expect(res?.outcome.result).toBe("dnc");
+    expect(res?.task.status).toBe("blocked");
+    expect(dncCalls()).toBe(before);
+  });
+  it("with the scrub required, the same fresh number is looked up and blocked", async () => {
+    const id = await only(SEED.phones.landlineFl);
+    MOCK_DNC_NUMBERS.add(SEED.phones.landlineFl);
+    try {
+      const before = dncCalls();
+      const res = await gateAndClaim(t2.db, a2, cfg, { didId: r2.did.id, now: NOON });
+      expect(res?.outcome.result).toBe("dnc");
+      expect(dncCalls()).toBe(before + 1);
+      const [c] = await t2.db.select().from(contact).where(eq(contact.id, id));
+      expect(c?.dncFederal).toBe(true);
+    } finally { MOCK_DNC_NUMBERS.delete(SEED.phones.landlineFl); }
+  });
+});

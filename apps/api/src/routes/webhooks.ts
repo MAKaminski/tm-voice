@@ -7,7 +7,7 @@ export function webhookRoutes() {
   return new Hono<AppEnv>().post("/hcp", async (c) => {
     const { adapters, producer } = c.get("deps");
     const raw = await c.req.text();
-    if (!adapters.hcp.verifyWebhook(c.req.header("x-hcp-signature"), raw)) return c.json({ error: "bad_signature" }, 401);
+    if (!adapters.hcp.verifyWebhook(c.req.header("x-housecallpro-signature"), raw)) return c.json({ error: "bad_signature" }, 401);
     const body = JSON.parse(raw || "{}") as { event?: string; id?: string };
     const event = body.event ?? "unknown";
     await c.get("availability").invalidate();

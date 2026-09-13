@@ -12,12 +12,25 @@ The FCC classifies AI-generated voice as an "artificial voice" under the TCPA. C
 |---|---|---|---|
 | 1 | Surface: `landline_only` → `line_type = landline`; `consented_mobile` → wireless needs a `grant` newer than any `revoke`. MA excluded unless `ALLOW_MA_RECORDING=true` | `surface` | `contact.line_type`, `consent_event` |
 | 2 | Suppression by `phone_e164` (never by contact) | `suppressed` | `suppression` |
-| 3 | DNC federal/state (DoNotCallDNC; cached 30 days on the contact) | `dnc` | `contact.dnc_*`, dnc adapter |
+| 3 | DNC federal/state (DoNotCallDNC; cached 30 days on the contact). **Lookup skipped when `DNC_SCRUB=off`; a cached hit still blocks** | `dnc` | `contact.dnc_*`, dnc adapter |
 | 4 | Calling window 08:00–21:00 local; FL cutoff 20:00; CT start 09:00 | `window` | `contact.timezone`, `contact.state` |
 | 5 | Per-DID daily cap | `did_cap` | `did.daily_cap`, `call` |
 | 6 | Attempt cap per contact per campaign (default 3) | `attempts` | `call_task.attempt_no`, `campaign.max_attempts` |
 
 `gate_result` is written in the same transaction that claims the task (`SELECT … FOR UPDATE SKIP LOCKED`). Only `pass` reaches the vapi/telnyx adapters, and those adapters independently enforce `DIAL_MODE`.
+
+## DNC scrub flag (`DNC_SCRUB`, decided 2026-09-13)
+
+`DNC_SCRUB=required` is the default and what the gate table above describes. `DNC_SCRUB=off` is a deliberate go-live decision to dial before a DoNotCallDNC block has been purchased. What it changes, precisely:
+
+| | `required` | `off` |
+|---|---|---|
+| Registry lookup on a stale or never-checked contact | Yes, via the dnc adapter | **No** |
+| `DNC_API_KEY` in the dial-path keys the loader demands | Yes | **No** |
+| A `federal`/`state` hit already cached on `contact.dnc_*` | Blocks (`dnc`) | **Still blocks** — the flag removes the lookup, not the knowledge |
+| Visibility | — | `warn` at api and worker boot; `dnc_scrub: "off"` on `/health`; red pill on the console dashboard |
+
+The basis for running `off`: the pilot list is property-management **businesses** reached on landlines, and the TSR's National DNC provisions cover residential subscribers, not business-to-business calls. That exemption is narrower than it sounds — a sole proprietor's line can be a residential number, and state lists differ — so `off` is a decision that belongs on the counsel checklist below, not a default. Flip it back to `required` the day a lookup block is bought; nothing else changes.
 
 ## Opening disclosure (fixed, first utterance)
 
@@ -41,7 +54,7 @@ Covers artificial-voice notice, company name, purpose, recorded-line notice, and
 ## Before the first real dial (Michael)
 
 - [ ] Telnyx Verified tier; DIDs owned, A-attestation, Free Caller Registry submitted
-- [ ] DoNotCallDNC block purchased; written DNC policy on file
+- [ ] DoNotCallDNC block purchased; written DNC policy on file — **or** `DNC_SCRUB=off` recorded as a counsel-reviewed decision with the B2B-only list policy that justifies it
 - [ ] Counsel reviews script, consent language, list policy
 - [ ] Texas registration if any TX contacts; GA SB 73 scrub for GA mobiles
 - [ ] `DIAL_MODE=verified_only` with `DIAL_ALLOWLIST` = your own numbers first

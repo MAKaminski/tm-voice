@@ -75,8 +75,8 @@ describe("hcp.createJob", () => {
     expect(row?.hcpJobId).toBe(res.hcp_job_id);
     expect(row?.status).toBe("synced");
     const sent = ctx.adapters.hcp.mock!.calls.filter((c) => c.method === "createJob").at(-1)!;
-    // invoice_number is the dedupe handle HCP documents, so it must be the booking id.
-    expect((sent.args[0] as { invoice_number: string }).invoice_number).toBe(bookingId);
+    // The booking id is the idempotency handle the adapter tags the HCP job with.
+    expect((sent.args[0] as { idempotency_key: string }).idempotency_key).toBe(bookingId);
     expect((sent.args[0] as { employee_ids: string[] }).employee_ids).toEqual(["emp_pedro"]);
   });
 

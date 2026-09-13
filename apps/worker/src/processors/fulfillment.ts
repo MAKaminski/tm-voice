@@ -61,8 +61,9 @@ export const hcpCreateJob: Processor = async (ctx, payload) => {
     scheduled_start: b.booking.windowStart.toISOString(),
     arrival_window_in_minutes: b.booking.arrivalWindowMin,
     employee_ids: b.technician.hcpEmployeeId ? [b.technician.hcpEmployeeId] : [],
-    // HCP has no idempotency header; invoice_number is the documented dedupe handle.
-    invoice_number: b.booking.id,
+    // HCP has no idempotency header and assigns invoice numbers itself; the adapter carries this
+    // as a tm-voice:<id> tag and finds the job by it on retry.
+    idempotency_key: b.booking.id,
   });
 
   await ctx.db.update(booking).set({ hcpJobId: res.id, status: "synced", updatedAt: new Date() }).where(eq(booking.id, b.booking.id));

@@ -1,7 +1,7 @@
 import { type Booking, apiGet, fmtEt } from "@/lib/api";
 
 interface Campaign { id: string; name: string; status: string; dailyDialCap: number; maxAttempts: number }
-interface Health { ok: boolean; dial_mode: string; target_surface: string; auto_book: boolean; vendors: { vendor: string; mode: string; ok: boolean }[] }
+interface Health { ok: boolean; dial_mode: string; target_surface: string; dnc_scrub: string; auto_book: boolean; vendors: { vendor: string; mode: string; ok: boolean }[] }
 
 export default async function Dashboard() {
   const [health, campaigns, pending] = await Promise.all([
@@ -18,6 +18,7 @@ export default async function Dashboard() {
           <>
             <span className={`pill ${health.dial_mode === "live" ? "bad" : ""}`}>DIAL_MODE {health.dial_mode}</span>{" "}
             <span className="pill">{health.target_surface}</span>{" "}
+            <span className={`pill ${health.dnc_scrub === "off" ? "bad" : ""}`}>DNC_SCRUB {health.dnc_scrub}</span>{" "}
             <span className={`pill ${health.auto_book ? "warn" : ""}`}>AUTO_BOOK {String(health.auto_book)}</span>
             <p style={{ margin: "10px 0 0", fontSize: 13, color: "var(--muted)" }}>
               Vendors: {health.vendors.map((v) => `${v.vendor} (${v.mode}${v.ok ? "" : " ✗"})`).join(" · ")}

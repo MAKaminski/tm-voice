@@ -74,9 +74,12 @@ export async function gateAndClaim(db: AnyDb, adapters: Pick<Adapters, "dnc" | "
     const [revoke] = await tx.select({ at: consentEvent.occurredAt }).from(consentEvent)
       .where(and(eq(consentEvent.contactId, c.id), eq(consentEvent.eventType, "revoke"))).orderBy(desc(consentEvent.occurredAt)).limit(1);
 
-    // DNC: cache 30 days on the contact row.
+    // DNC: cache 30 days on the contact row. With DNC_SCRUB=off the registry is never consulted
+    // and DNC_API_KEY is not required, but runGate still sees whatever is cached — so a number
+    // that was ever flagged stays blocked. "off" removes the lookup, not the knowledge.
     let dnc = { federal: c.dncFederal, state: c.dncState };
-    if (!c.dncCheckedAt || now.getTime() - c.dncCheckedAt.getTime() > DNC_CACHE_MS) {
+    const dncStale = !c.dncCheckedAt || now.getTime() - c.dncCheckedAt.getTime() > DNC_CACHE_MS;
+    if (cfg.DNC_SCRUB !== "off" && dncStale) {
       dnc = await adapters.dnc.lookup(c.phoneE164);
       await tx.update(contact).set({ dncFederal: dnc.federal, dncState: dnc.state, dncCheckedAt: now }).where(eq(contact.id, c.id));
     }

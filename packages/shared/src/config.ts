@@ -4,6 +4,15 @@ export const DIAL_MODES = ["dry_run", "verified_only", "live"] as const;
 export type DialMode = (typeof DIAL_MODES)[number];
 export const TARGET_SURFACES = ["landline_only", "consented_mobile"] as const;
 export type TargetSurface = (typeof TARGET_SURFACES)[number];
+/**
+ * Whether the pre-dial gate consults the DNC registry vendor.
+ * `required` (default): every claim looks the number up (cached 30 days) and DNC_API_KEY is a
+ * dial-path key. `off`: no lookup is made and the key is not required — but a hit already cached
+ * on the contact still blocks. Turning this off is a compliance decision, not a convenience; it
+ * is logged at boot and reported by /health.
+ */
+export const DNC_SCRUB_MODES = ["required", "off"] as const;
+export type DncScrub = (typeof DNC_SCRUB_MODES)[number];
 
 const bool = z
   .union([z.boolean(), z.enum(["true", "false", "1", "0"])])
@@ -64,6 +73,11 @@ export const DIAL_PATH_VENDOR_KEYS = [
   "DNC_API_KEY",
 ] as const satisfies readonly VendorKey[];
 
+/** The dial-path keys this particular config actually requires: DNC_SCRUB=off drops DNC_API_KEY. */
+export function requiredDialPathKeys(cfg: { DNC_SCRUB: DncScrub }): readonly VendorKey[] {
+  return cfg.DNC_SCRUB === "off" ? DIAL_PATH_VENDOR_KEYS.filter((k) => k !== "DNC_API_KEY") : DIAL_PATH_VENDOR_KEYS;
+}
+
 const vendorShape = Object.fromEntries(
   VENDOR_KEYS.map((k) => [k, z.string().min(1).optional()]),
 ) as Record<VendorKey, z.ZodOptional<z.ZodString>>;
@@ -83,13 +97,14 @@ export const configSchema = z
       .default("")
       .transform((s) => s.split(",").map((x) => x.trim()).filter(Boolean)),
     COMPLIANCE_TARGET_SURFACE: z.enum(TARGET_SURFACES).default("landline_only"),
+    DNC_SCRUB: z.enum(DNC_SCRUB_MODES).default("required"),
     AUTO_BOOK: bool.default(false),
     ALLOW_MA_RECORDING: bool.default(false),
     ...vendorShape,
   })
   .superRefine((cfg, ctx) => {
     if (cfg.DIAL_MODE !== "dry_run") {
-      const missing = DIAL_PATH_VENDOR_KEYS.filter((k) => !cfg[k]);
+      const missing = requiredDialPathKeys(cfg).filter((k) => !cfg[k]);
       if (missing.length) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
