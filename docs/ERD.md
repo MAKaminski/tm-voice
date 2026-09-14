@@ -149,6 +149,7 @@ transcript
   call_id  uuid  [FK->call.id NOT NULL]
   turns  jsonb  [NOT NULL]
   summary  text
+  structured  jsonb
   created_at  timestamp with time zone  [NOT NULL]
   updated_at  timestamp with time zone  [NOT NULL]
 consent_event

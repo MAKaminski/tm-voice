@@ -1,0 +1,1 @@
+ALTER TABLE "agents"."transcript" ADD COLUMN "structured" jsonb;

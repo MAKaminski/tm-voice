@@ -1,5 +1,5 @@
 import { and, eq, gte, sql } from "drizzle-orm";
-import { assertFirstUtterance } from "@tm/compliance";
+import { assertFirstUtterance, suppress } from "@tm/compliance";
 import { booking, call, callTask, campaign, contact, scriptVersion, suppression, transcript } from "@tm/db";
 import { type Disposition, logger } from "@tm/shared";
 import type { Processor } from "../context.js";
@@ -25,10 +25,17 @@ export type PostcallPayload = {
 const TERMINAL: readonly Disposition[] = ["booked", "opt_out", "not_interested", "wrong_number"];
 const RETRY_HOURS: Partial<Record<Disposition, number>> = { failed: 1, busy: 4, no_answer: 48, voicemail: 48, callback: 24 };
 
+/** analysis outcome (case-insensitive) → disposition. Covers the walkthrough script and the vendor-intake script. */
 const STRUCTURED_OUTCOMES: Record<string, Disposition> = {
   callback: "callback", not_interested: "not_interested", wrong_number: "wrong_number",
-  voicemail: "voicemail", no_answer: "no_answer", interested: "callback",
+  voicemail: "voicemail", no_answer: "no_answer", interested: "callback", opt_out: "opt_out",
+  // Vendor intake (script v3): a captured contact or packet is a human follow-up, and the call's job is done.
+  contact_captured: "callback", packet_captured: "callback", callback_requested: "callback",
+  gatekeeper_blocked: "callback", not_taking_vendors: "not_interested",
 };
+/** Outcomes that finish the task even though a human follows up (disposition stays callback). */
+const CLOSES_TASK = new Set(["contact_captured", "packet_captured"]);
+const outcomeKey = (o: unknown) => (typeof o === "string" ? o.trim().toLowerCase() : "");
 
 /**
  * Pure. Facts we own (a booking or an opt-out written during the call) beat Vapi's ended reason,
@@ -42,7 +49,7 @@ export function dispositionFor(i: { endedReason: string; booked: boolean; optedO
   if (r === "customer-busy") return "busy";
   if (r === "customer-did-not-answer") return "no_answer";
   if (/error|failed|fault|not-found|not-valid|join-timed-out/.test(r)) return "failed";
-  const s = typeof i.structuredOutcome === "string" ? STRUCTURED_OUTCOMES[i.structuredOutcome] : undefined;
+  const s = STRUCTURED_OUTCOMES[outcomeKey(i.structuredOutcome)];
   if (s) return s;
   return i.customerTurns === 0 ? "no_answer" : "callback";
 }
@@ -61,6 +68,11 @@ export const postcallProcess: Processor<PostcallPayload> = async (ctx, p) => {
   const [s] = ct ? await ctx.db.select({ id: suppression.id }).from(suppression)
     .where(and(eq(suppression.phoneE164, ct.phoneE164), gte(suppression.createdAt, c.startedAt))).limit(1) : [];
   const customerTurns = p.turns.filter((t) => t.role === "customer").length;
+  const outcome = outcomeKey(p.structured?.["outcome"]);
+  // The assistant heard an opt-out but no opt_out tool call wrote it: write it now, so the number is never dialed again.
+  if (outcome === "opt_out" && !s && ct) {
+    await suppress(ctx.db, { phoneE164: ct.phoneE164, reason: "opt-out heard on call (post-call analysis)", channel: "phone", callId: c.id, artifact: { vapi_call_id: p.vapi_call_id } });
+  }
   const disposition = dispositionFor({ endedReason: p.ended_reason, booked: !!b, optedOut: !!s, customerTurns, structuredOutcome: p.structured?.["outcome"] });
 
   // Rule 10 runtime check: the first thing the assistant said must be the fixed disclosure line.
@@ -83,11 +95,11 @@ export const postcallProcess: Processor<PostcallPayload> = async (ctx, p) => {
       costUsd: (p.cost_usd ?? 0).toFixed(4), updatedAt: new Date(),
     }).where(eq(call.id, c.id));
     await tx.insert(transcript).values({
-      callId: c.id, turns: p.turns, summary: p.summary ?? null,
+      callId: c.id, turns: p.turns, summary: p.summary ?? null, structured: p.structured ?? null,
     });
     if (!task) return;
     const exhausted = camp ? task.attemptNo >= camp.maxAttempts : false;
-    if (TERMINAL.includes(disposition) || (exhausted && disposition !== "failed")) {
+    if (TERMINAL.includes(disposition) || CLOSES_TASK.has(outcome) || (exhausted && disposition !== "failed")) {
       await tx.update(callTask).set({ status: "done", updatedAt: new Date() }).where(eq(callTask.id, task.id));
     } else {
       const hours = RETRY_HOURS[disposition] ?? 24;
