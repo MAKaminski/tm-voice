@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAdapters } from "@tm/adapters";
 import { createProducer } from "@tm/api";
-import { DISCLOSURE_LINE, SEED, call, callTask, seed, transcript } from "@tm/db";
+import { DISCLOSURE_LINE, SEED, call, callTask, seed, suppression, transcript } from "@tm/db";
 import { createTestDb } from "@tm/db/test";
 import { loadConfig } from "@tm/shared";
 import type { Ctx } from "../src/context.js";
@@ -86,6 +86,28 @@ describe("postcall.process", () => {
     expect(out).toMatchObject({ disposition: "not_interested", disclosure_ok: false });
     const [task] = await t.db.select().from(callTask).where(eq(callTask.id, taskId));
     expect(task?.status).toBe("done");
+  });
+
+  it("vendor intake: PACKET_CAPTURED closes the task, keeps the captured fields, and needs a human callback", async () => {
+    await t.db.update(callTask).set({ status: "dialed" }).where(eq(callTask.id, taskId));
+    await t.db.insert(call).values({ callTaskId: taskId, vapiCallId: "vapi_pk_1" });
+    const structured = { outcome: "PACKET_CAPTURED", packet_type: "PORTAL", packet_platform: "AppFolio", contact_email: "vendors@example.com" };
+    const out = await postcallProcess(ctx, { ...env("vapi_pk_1"), vapi_call_id: "vapi_pk_1", ended_reason: "assistant-ended-call", structured, turns: [{ role: "customer", text: "Use our AppFolio portal.", at_sec: 5 }] });
+    expect(out).toMatchObject({ disposition: "callback" });
+    const [c] = await t.db.select().from(call).where(eq(call.vapiCallId, "vapi_pk_1"));
+    const [tr] = await t.db.select().from(transcript).where(eq(transcript.callId, c!.id));
+    expect(tr?.structured).toEqual(structured);
+    const [task] = await t.db.select().from(callTask).where(eq(callTask.id, taskId));
+    expect(task?.status).toBe("done");
+  });
+
+  it("an OPT_OUT heard on the call writes the suppression even without the tool call", async () => {
+    await t.db.update(callTask).set({ status: "dialed" }).where(eq(callTask.id, taskId));
+    await t.db.insert(call).values({ callTaskId: taskId, vapiCallId: "vapi_oo_1" });
+    const out = await postcallProcess(ctx, { ...env("vapi_oo_1"), vapi_call_id: "vapi_oo_1", ended_reason: "customer-ended-call", structured: { outcome: "OPT_OUT" }, turns: [{ role: "customer", text: "Take me off your list.", at_sec: 3 }] });
+    expect(out).toMatchObject({ disposition: "opt_out" });
+    const rows = await t.db.select().from(suppression).where(eq(suppression.phoneE164, SEED.phones.landlineGa));
+    expect(rows).toHaveLength(1);
   });
 
   it("ignores a report for a call we never placed", async () => {

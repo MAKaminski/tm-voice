@@ -167,6 +167,8 @@ export const transcript = agents.table("transcript", {
   callId: uuid("call_id").notNull().references(() => call.id),
   turns: jsonb("turns").notNull().default([]),
   summary: text("summary"),
+  /** Vapi call analysis (structuredDataPlan): the fields the assistant captured, e.g. contact_email, packet_type, outcome. */
+  structured: jsonb("structured"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }).enableRLS();
