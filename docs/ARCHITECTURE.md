@@ -105,7 +105,7 @@ flowchart LR
   vapi -->|"BYO SIP trunk<br/>Telnyx DID must be imported into Vapi first"| telnyx
   telnyx -->|"PSTN"| prospect
   vapi -->|"POST /tools/* · header X-Vapi-Secret<br/>get_availability · book_job · send_packet · opt_out"| api
-  vapi -.->|"end-of-call-report<br/>needs POST /webhooks/vapi — NOT BUILT"| api
+  vapi -.->|"end-of-call-report<br/>POST /webhooks/vapi → postcall.process"| api
   telnyx -.->|"call events · Ed25519 headers<br/>needs POST /webhooks/telnyx — NOT BUILT"| api
 
   worker -->|"GET /employees · GET /jobs?scheduled_start_min/max · GET /company/schedule_availability<br/>POST /jobs · Bearer HCP_API_KEY · tm-voice:&lt;id&gt; tag"| hcp
@@ -219,7 +219,7 @@ sequenceDiagram
       A->>PG: createBooking → status pending_review (AUTO_BOOK = false)
       A-->>V: booked · "the office will confirm by email"
     end
-    V--xA: end-of-call-report — no route yet (Phase 5)
+    V->>A: end-of-call-report → postcall.process
   end
 ```
 
@@ -347,8 +347,8 @@ flowchart TD
 | **hcp** | mock — returns the seed fixture | real: `materialize` pulls the 8 real technicians, their jobs and the company windows every 15 min; `createJob` writes back after approval | `account.hcp_customer_id` on the account being booked — without it `createJob` refuses with `customer_required` rather than guessing a customer |
 | **`/health`** | `mock` for all 8, `ok:true` regardless | Per-vendor truth; a bad credential finally shows as `ok:false` | — |
 | **Telnyx call events** | nothing arrives | Telnyx POSTs to `/webhooks/telnyx` and gets **404** | The route — `telnyxWebhookOk()` is written and untested against a caller |
-| **Vapi end-of-call-report** | nothing arrives | Vapi POSTs to the server URL and gets **404**; no recording, no transcript, no `apollo.logCall` | `POST /webhooks/vapi` and the Phase 5 post-call pipeline (`postcall.process` is a stub) |
-| **Disclosure line** | enforced by Vapi config | same | Runtime check via `assertFirstUtterance()` over the transcript — has no caller until Phase 5 |
+| **Vapi end-of-call-report** | disposition, duration, cost, transcript, task retry written by `postcall.process` (2026-09-13) | recording to R2 and `apollo.logCall` still missing | R2 bucket decision; Apollo plan with call logging |
+| **Disclosure line** | enforced by Vapi config, checked on every transcript by `postcall.process` | — | — |
 | **Database rows** | seed fixture only | same rows drive real calls | `script_version` (active), `did`, `campaign` with `apollo_saved_search_id` + `status='active'`. `pnpm db:seed` has never run against TM1 |
 
 Every row in this table is now a *missing thing* rather than a regression: the HCP client that used to turn `real` mode into a 15-minute failure loop is written and its reads are verified against the live account. The remaining code gaps — the two webhook routes and the Phase 5 post-call pipeline — degrade nothing that works today.
@@ -400,7 +400,7 @@ Worker schedules registered at boot: `dial.tick` 60s · `dial.requeue` 30m · `a
 | Middleware | Tool API `/tools/*` | `apps/api/src/routes/tools.ts` | **Built and wired**: 4 Vapi function tools point at it with the shared secret |
 | Middleware | Booking API, review, availability, health | `apps/api/src/routes/*` | **Built** |
 | Middleware | Webhooks | `apps/api/src/routes/webhooks.ts` | `/hcp` exists and fails closed until a signing secret is configured; **`/telnyx` and `/vapi` do not exist** |
-| Middleware | Dial orchestrator, campaign ingest, requeue, fulfillment | `apps/worker/src/processors` | **Built.** `postcall.process` and `apollo.logCall` are stubs |
+| Middleware | Dial orchestrator, campaign ingest, requeue, fulfillment | `apps/worker/src/processors` | **Built.** `apollo.logCall` is a stub; `postcall.process` writes results but not recordings |
 | Middleware | Pre-dial gate, suppression, consent ledger, calling windows | `packages/compliance` | **Built.** `assertFirstUtterance` has no caller |
 | Middleware | Vendor adapters | `packages/adapters` | **8 of 8 real clients written.** hcp reads verified live; `POST /jobs` body mirrors HCP's own field names, unverified until the first real approval |
 | Middleware | Config loader, logger, errors, job envelope | `packages/shared` | **Built.** Blank Railway variables read as unset |

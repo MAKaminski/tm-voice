@@ -1,0 +1,94 @@
+import { eq } from "drizzle-orm";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createAdapters } from "@tm/adapters";
+import { createProducer } from "@tm/api";
+import { DISCLOSURE_LINE, SEED, call, callTask, seed, transcript } from "@tm/db";
+import { createTestDb } from "@tm/db/test";
+import { loadConfig } from "@tm/shared";
+import type { Ctx } from "../src/context.js";
+import { dispositionFor, postcallProcess } from "../src/processors/postcall.js";
+
+const cfg = loadConfig({ DATABASE_URL: "x", INTERNAL_API_TOKEN: "0123456789abcdef0123" });
+let t: Awaited<ReturnType<typeof createTestDb>>;
+let ctx: Ctx;
+let taskId: string;
+const env = (id: string) => ({ entity_id: id, idempotency_key: `postcall:${id}`, attempt: 0, enqueued_at: new Date().toISOString() });
+
+beforeAll(async () => {
+  t = await createTestDb();
+  const r = await seed(t.db);
+  ctx = { cfg, db: t.db, adapters: createAdapters(cfg), producer: createProducer(undefined, async () => {}) };
+  const dana = r.contacts.find((x) => x.phoneE164 === SEED.phones.landlineGa)!;
+  const [task] = await t.db.select().from(callTask).where(eq(callTask.contactId, dana.id));
+  taskId = task!.id;
+  await t.db.update(callTask).set({ status: "dialed", attemptNo: 1 }).where(eq(callTask.id, taskId));
+});
+afterAll(() => t.close());
+
+describe("dispositionFor", () => {
+  const base = { endedReason: "customer-ended-call", booked: false, optedOut: false, customerTurns: 3 };
+  it("lets facts we wrote beat Vapi's reason", () => {
+    expect(dispositionFor({ ...base, optedOut: true, booked: true })).toBe("opt_out");
+    expect(dispositionFor({ ...base, booked: true, endedReason: "voicemail" })).toBe("booked");
+  });
+  it("maps Vapi ended reasons", () => {
+    expect(dispositionFor({ ...base, endedReason: "voicemail" })).toBe("voicemail");
+    expect(dispositionFor({ ...base, endedReason: "customer-busy" })).toBe("busy");
+    expect(dispositionFor({ ...base, endedReason: "customer-did-not-answer" })).toBe("no_answer");
+    expect(dispositionFor({ ...base, endedReason: "pipeline-error-eleven-labs-blocked-free-plan-and-requested-upgrade" })).toBe("failed");
+  });
+  it("uses the structured outcome, else the number of customer turns", () => {
+    expect(dispositionFor({ ...base, endedReason: "silence-timed-out", structuredOutcome: "voicemail" })).toBe("voicemail");
+    expect(dispositionFor({ ...base, structuredOutcome: "not_interested" })).toBe("not_interested");
+    expect(dispositionFor({ ...base, customerTurns: 0, endedReason: "silence-timed-out" })).toBe("no_answer");
+    expect(dispositionFor({ ...base })).toBe("callback");
+  });
+});
+
+describe("postcall.process", () => {
+  it("records voicemail and the transcript, checks the disclosure, and re-queues the task in 48 h", async () => {
+    await t.db.insert(call).values({ callTaskId: taskId, vapiCallId: "vapi_vm_1", startedAt: new Date("2026-09-13T21:50:56Z") });
+    const out = await postcallProcess(ctx, {
+      ...env("vapi_vm_1"), vapi_call_id: "vapi_vm_1", ended_reason: "voicemail",
+      started_at: "2026-09-13T21:50:56Z", ended_at: "2026-09-13T21:51:20Z", cost_usd: 0.03,
+      turns: [{ role: "assistant", text: DISCLOSURE_LINE, at_sec: 1.8 }, { role: "customer", text: "Please leave a message.", at_sec: 9 }],
+    });
+    expect(out).toMatchObject({ disposition: "voicemail", disclosure_ok: true });
+    const [c] = await t.db.select().from(call).where(eq(call.vapiCallId, "vapi_vm_1"));
+    expect(c).toMatchObject({ disposition: "voicemail", durationSec: 24, costUsd: "0.0300" });
+    const [tr] = await t.db.select().from(transcript).where(eq(transcript.callId, c!.id));
+    expect(tr?.turns).toHaveLength(2);
+    const [task] = await t.db.select().from(callTask).where(eq(callTask.id, taskId));
+    expect(task?.status).toBe("queued");
+    expect(task?.earliestDialAt.toISOString()).toBe("2026-09-15T21:51:20.000Z");
+  });
+
+  it("is idempotent: a replayed report changes nothing", async () => {
+    const out = await postcallProcess(ctx, { ...env("vapi_vm_1"), vapi_call_id: "vapi_vm_1", ended_reason: "customer-ended-call", turns: [] });
+    expect(out).toMatchObject({ skipped: "already_processed", disposition: "voicemail" });
+  });
+
+  it("a vendor failure does not use up one of the contact's attempts", async () => {
+    await t.db.update(callTask).set({ status: "dialed", attemptNo: 2 }).where(eq(callTask.id, taskId));
+    await t.db.insert(call).values({ callTaskId: taskId, vapiCallId: "vapi_fail_1" });
+    await postcallProcess(ctx, { ...env("vapi_fail_1"), vapi_call_id: "vapi_fail_1", ended_reason: "pipeline-error-eleven-labs-blocked-free-plan-and-requested-upgrade", turns: [] });
+    const [task] = await t.db.select().from(callTask).where(eq(callTask.id, taskId));
+    expect(task).toMatchObject({ status: "queued", attemptNo: 1 });
+  });
+
+  it("flags an opening that is not the disclosure line, and closes the task on not_interested", async () => {
+    await t.db.update(callTask).set({ status: "dialed" }).where(eq(callTask.id, taskId));
+    await t.db.insert(call).values({ callTaskId: taskId, vapiCallId: "vapi_ni_1" });
+    const out = await postcallProcess(ctx, {
+      ...env("vapi_ni_1"), vapi_call_id: "vapi_ni_1", ended_reason: "customer-ended-call", structured: { outcome: "not_interested" },
+      turns: [{ role: "assistant", text: "Hey there, quick question for you.", at_sec: 1 }, { role: "customer", text: "No thanks.", at_sec: 4 }],
+    });
+    expect(out).toMatchObject({ disposition: "not_interested", disclosure_ok: false });
+    const [task] = await t.db.select().from(callTask).where(eq(callTask.id, taskId));
+    expect(task?.status).toBe("done");
+  });
+
+  it("ignores a report for a call we never placed", async () => {
+    expect(await postcallProcess(ctx, { ...env("nope"), vapi_call_id: "nope", ended_reason: "voicemail", turns: [] })).toEqual({ skipped: "unknown_call" });
+  });
+});

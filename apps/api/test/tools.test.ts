@@ -189,3 +189,37 @@ describe("POST /tools/send_packet", () => {
     expect(result.say).toMatch(/office follow up/);
   });
 });
+
+describe("POST /webhooks/vapi", () => {
+  const report = {
+    message: {
+      type: "end-of-call-report", endedReason: "voicemail", cost: 0.09,
+      startedAt: "2026-09-13T21:50:56Z", endedAt: "2026-09-13T21:52:24Z",
+      call: { id: "vapi_call_eoc", name: "8286b444-5d54-4145-8746-e3413fa90548" },
+      analysis: { summary: "Reached voicemail.", structuredData: { outcome: "voicemail" } },
+      artifact: { messages: [{ role: "system", message: "prompt" }, { role: "bot", message: "Hi", secondsFromStart: 1.84 }, { role: "user", message: "Leave a message", secondsFromStart: 9 }] },
+    },
+  };
+  it("rejects an unsigned report", async () => {
+    const res = await app.request("/webhooks/vapi", { method: "POST", body: JSON.stringify(report) });
+    expect(res.status).toBe(401);
+  });
+  it("queues one postcall.process job for an end-of-call report", async () => {
+    const before = enqueued.length;
+    const res = await post("/webhooks/vapi", report);
+    expect(res.status).toBe(200);
+    expect(enqueued.slice(before)).toEqual(["postcall.process"]);
+  });
+  it("acknowledges and drops other message types", async () => {
+    const before = enqueued.length;
+    const res = await post("/webhooks/vapi", { message: { type: "status-update", status: "in-progress" } });
+    expect(await json(res)).toMatchObject({ ok: true, ignored: "status-update" });
+    expect(enqueued.length).toBe(before);
+  });
+  it("reduces the report to turns without the system prompt", async () => {
+    const { postcallPayloadFrom } = await import("../src/routes/webhooks.js");
+    const p = postcallPayloadFrom(report.message as never);
+    expect(p).toMatchObject({ vapi_call_id: "vapi_call_eoc", call_task_id: "8286b444-5d54-4145-8746-e3413fa90548", ended_reason: "voicemail", cost_usd: 0.09, structured: { outcome: "voicemail" } });
+    expect(p.turns).toEqual([{ role: "assistant", text: "Hi", at_sec: 1.8 }, { role: "customer", text: "Leave a message", at_sec: 9 }]);
+  });
+});
