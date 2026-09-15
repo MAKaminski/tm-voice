@@ -6,6 +6,7 @@ import { dialClaim, dialTick } from "./processors/dial.js";
 import { postcallProcess } from "./processors/postcall.js";
 import { graphCreateEvent, hcpCreateJob, resendSendPacket } from "./processors/fulfillment.js";
 import { retentionSweep } from "./processors/retention.js";
+import { vapiSyncAssistant } from "./processors/voice.js";
 import { stub } from "./processors/stubs.js";
 
 type AnyProcessor = Processor<never>;
@@ -21,6 +22,7 @@ export const REGISTRY: Record<QueueName, Record<string, AnyProcessor>> = {
   apollo: { logCall: p(stub("apollo", 5)), syncCampaign: p(apolloSyncCampaign as Processor) },
   availability: { materialize: p(availabilityMaterialize), invalidate: p(availabilityInvalidate) },
   retention: { sweep: p(retentionSweep) },
+  vapi: { syncAssistant: p(vapiSyncAssistant) },
 };
 
 /** Repeatable schedules registered at boot. */
@@ -31,4 +33,7 @@ export const SCHEDULES = [
   // Apollo's contact search costs no credits, so an hourly pull keeps the queue fed cheaply.
   { queue: "apollo" as const, name: "syncCampaign", every: 60 * 60_000 },
   { queue: "dial" as const, name: "requeue", every: 30 * 60_000 },
+  // Reconciles Joe's voice and opening line against the checked-in profile. Daily is enough: it
+  // exists to catch dashboard drift, and it PATCHes only when the live assistant actually differs.
+  { queue: "vapi" as const, name: "syncAssistant", every: 24 * 3_600_000 },
 ];

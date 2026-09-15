@@ -60,8 +60,10 @@ export type VendorKey = (typeof VENDOR_KEYS)[number];
  * every one, and its mock resolves most numbers to "landline" — the one value landline_only
  * accepts. A partial Telnyx config outside dry_run would therefore fail *open* and dial mobiles.
  *
- * Deepgram, ElevenLabs and the LLM are absent because no code here calls them: those keys are
- * pasted into Vapi's own Provider Keys, so demanding them locally gated nothing.
+ * Deepgram, ElevenLabs and the LLM are absent because nothing on the dial path calls them: those
+ * keys are pasted into Vapi's own Provider Keys, so demanding them locally gated nothing.
+ * `ELEVENLABS_VOICE_ID` is read by `vapi.syncAssistant`, but that job runs on its own schedule —
+ * requiring it here would block dialling on a voice sync that has nothing to do with placing a call.
  */
 export const DIAL_PATH_VENDOR_KEYS = [
   "TELNYX_API_KEY",

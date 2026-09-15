@@ -34,7 +34,7 @@ flowchart LR
   subgraph railway["Railway · production"]
     console["console<br/>Next.js 15 · port 3000<br/>server components only, no DB"]:::svc
     api["api<br/>Hono · port 8787"]:::svc
-    worker["worker<br/>BullMQ · 8 queues<br/>dial concurrency = 1"]:::svc
+    worker["worker<br/>BullMQ · 9 queues<br/>dial concurrency = 1"]:::svc
     redis[("Redis<br/>BullMQ queues + DLQ 'dead'<br/>slot cache, 15 min TTL")]:::store
   end
 
@@ -102,6 +102,7 @@ flowchart LR
   worker -->|"GET /number_lookup · Bearer TELNYX_API_KEY<br/>line_type cached 90d on contact"| telnyx
   worker -->|"GET check · DNC_API_KEY<br/>federal only · cached 30d"| dnc
   worker -->|"POST /call · Bearer VAPI_PRIVATE_KEY<br/>assistantId · phoneNumberId · name = call_task_id"| vapi
+  worker -->|"GET + PATCH /assistant/{id} · daily<br/>firstMessage + voice reconciled to this repo"| vapi
   vapi -->|"BYO SIP trunk<br/>Telnyx DID must be imported into Vapi first"| telnyx
   telnyx -->|"PSTN"| prospect
   vapi -->|"POST /tools/* · header X-Vapi-Secret<br/>get_availability · book_job · send_packet · opt_out"| api
@@ -121,7 +122,7 @@ flowchart LR
 | Vendor | Goes `real` when all of these are set | Real client speaks | Idempotency | The constraint worth knowing |
 |---|---|---|---|---|
 | **telnyx** | `TELNYX_API_KEY` `TELNYX_CONNECTION_ID` `TELNYX_PUBLIC_KEY` | `GET /v2/number_lookup/{n}?type=carrier` · `POST /v2/calls` · Ed25519 verify over `timestamp\|rawBody` | `command_id = call_task_id`: Telnyx drops a repeated id, so a retried job cannot double-dial | `carrier.type` maps to `landline` **only** for `fixed line`. `fixed line or mobile`, toll-free and anything unrecognised become `unknown`, which `landline_only` refuses. All three keys are required *together* because the mock resolves most numbers to `landline` — a partial config would fail open. |
-| **vapi** | `VAPI_PRIVATE_KEY` `VAPI_WEBHOOK_SECRET` `VAPI_ASSISTANT_ID` | `POST /call` · `GET /call/{id}` · `GET /phone-number` | The job envelope's key; Vapi has none | Vapi addresses caller ID by **`phoneNumberId`**, not E.164, so the Telnyx DID must first be **imported into Vapi** as a BYO number. `resolvePhoneNumberId` throws `unknown_from_number` otherwise — non-retryable, no call placed. The call object has no metadata field; the correlation id rides in `name` (40-char cap). |
+| **vapi** | `VAPI_PRIVATE_KEY` `VAPI_WEBHOOK_SECRET` `VAPI_ASSISTANT_ID` | `POST /call` · `GET /call/{id}` · `GET /phone-number` · `GET /assistant/{id}` · `PATCH /assistant/{id}` | The job envelope's key; Vapi has none. The assistant sync is idempotent by diff instead: it reads the live object and PATCHes only the fields that drifted | Vapi addresses caller ID by **`phoneNumberId`**, not E.164, so the Telnyx DID must first be **imported into Vapi** as a BYO number. `resolvePhoneNumberId` throws `unknown_from_number` otherwise — non-retryable, no call placed. The call object has no metadata field; the correlation id rides in `name` (40-char cap). |
 | **dnc** | `DNC_API_KEY` | `GET /api/v1/check-1/` | n/a (read) | US-only — a non-`+1` number is refused, not reported clean. Returns a **federal** determination only; `state` is always `false`. State scrubbing is an open compliance gap. |
 | **graph** | `MS_TENANT_ID` `MS_CLIENT_ID` `MS_CLIENT_CERT_PEM` `MS_BOOKING_MAILBOX` | client-credential token, then `POST /users/{mailbox}/events` | Graph `transactionId = booking id` | `private_key_jwt` with PS256 and `x5t#S256`, so the PEM must hold **both** the `CERTIFICATE` and `PRIVATE KEY` blocks; `\n`-escaped form accepted because Railway cannot store newlines. Cert expires **2028-09-12**; nothing in this system watches for that. |
 | **resend** | `RESEND_API_KEY` `MAIL_FROM` | `POST /emails` | `Idempotency-Key` header, 24h, ≤256 chars | One `email_send` row per (booking, template); a re-run finds `status=sent` and stops before the vendor. |
@@ -171,7 +172,7 @@ stateDiagram-v2
   end note
 ```
 
-The seven dial-path keys are `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY`, `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`, `VAPI_ASSISTANT_ID`, `DNC_API_KEY`. Requiring only these — not all 25 — means a first test call does not depend on a Graph certificate or a Resend domain. **`DNC_SCRUB=off` drops `DNC_API_KEY` from that set** (`requiredDialPathKeys()`): the gate then makes no registry lookup, but a hit already cached on a contact still blocks. It is a compliance decision — see `docs/COMPLIANCE.md` — and is logged at boot, reported by `/health` as `dnc_scrub`, and shown as a red pill on the console. Deepgram, ElevenLabs and the LLM are deliberately **not** in the list: no code here calls them; those keys live inside Vapi's own Provider Keys.
+The seven dial-path keys are `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY`, `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`, `VAPI_ASSISTANT_ID`, `DNC_API_KEY`. Requiring only these — not all 25 — means a first test call does not depend on a Graph certificate or a Resend domain. **`DNC_SCRUB=off` drops `DNC_API_KEY` from that set** (`requiredDialPathKeys()`): the gate then makes no registry lookup, but a hit already cached on a contact still blocks. It is a compliance decision — see `docs/COMPLIANCE.md` — and is logged at boot, reported by `/health` as `dnc_scrub`, and shown as a red pill on the console. Deepgram, ElevenLabs and the LLM are deliberately **not** in the list: nothing on the dial path calls them; those keys live inside Vapi's own Provider Keys. The one exception is `ELEVENLABS_VOICE_ID`, which `vapi.syncAssistant` reads to name the voice it applies (§9.1) — that job runs on its own schedule, off the dial path, so a missing value stops the sync and logs, and never blocks a call.
 
 ---
 
@@ -386,8 +387,32 @@ Before adding a component, extend one of these. Two components solving the same 
 | One booking write path | `createBooking()` in `apps/api/src/booking-core.ts`, idempotent on (contact, window_start) | `/book/:token` and `book_job` |
 | Stateless slot handle | `slot_id` = short hash of (technician, window_start); recomputed on `book_job` | `get_availability` → `book_job` |
 | Idempotent write | unique `idempotency_key` column + `onConflictDoNothing` | `booking`, `email_send` |
+| Checked-in vendor state | desired state is a reviewed constant in this repo; a scheduled job reads the live object, diffs the fields it owns, and PATCHes only on drift | `vapi.syncAssistant` |
 
-Worker schedules registered at boot: `dial.tick` 60s · `dial.requeue` 30m · `availability.materialize` 15m · `apollo.syncCampaign` 60m · `retention.sweep` 24h. Concurrency is 1 on `dial`, 4 everywhere else.
+Worker schedules registered at boot: `dial.tick` 60s · `dial.requeue` 30m · `availability.materialize` 15m · `apollo.syncCampaign` 60m · `retention.sweep` 24h · `vapi.syncAssistant` 24h. Concurrency is 1 on `dial`, 4 everywhere else.
+
+### 9.1 The assistant's voice
+
+Joe is an ElevenLabs voice rendered by Vapi. His tuning used to exist only in the Vapi dashboard, which meant a change to how the agent sounds to a prospect produced no diff and no review. It now lives in `packages/adapters/src/vapi/voice.ts`, and `vapi.syncAssistant` reconciles assistant `VAPI_ASSISTANT_ID` against it once a day.
+
+The job owns exactly two fields: `firstMessage`, which it sets to the active `SCRIPT_VERSION.disclosure_line` verbatim (rule 10, now enforced by a running job rather than by convention), and the `voice` block below. Everything else on the assistant — model, tools, transcriber — is dashboard territory and is never written. `voiceId` is not in this file: which voice Joe *is* stays in `ELEVENLABS_VOICE_ID`, so swapping voices is a config change, while how he *sounds* is a code review.
+
+`pnpm voice:check` fails CI when this block drifts from the profile or when the profile is a shape ElevenLabs would not honour. `pnpm voice:write` regenerates it.
+
+<!-- voice:generated -->
+```
+# Joe's ElevenLabs voice, as applied to VAPI_ASSISTANT_ID by the vapi.syncAssistant job.
+# Generated from packages/adapters/src/vapi/voice.ts; do not hand-edit. Run: pnpm voice:write
+  model           eleven_flash_v2_5 ElevenLabs model. V2-or-newer is required for `style` to have any effect
+  stability       0.3               0–1. Lower is more expressive; high stability flattens prosody into a monotone
+  similarityBoost 0.75              0–1. Adherence to the source recording. Raising it re-flattens delivery
+  style           0.4               0–1. Style exaggeration. 0 is the flat read; higher costs some latency
+  useSpeakerBoost true              Keeps the speaker's timbre while the settings above loosen up
+  speed           1.07              0.7–1.2. Below 1.0 reads as downbeat
+```
+<!-- /voice:generated -->
+
+A note on `style`: it is ignored outside V2-class models, and the failure is silent — the PATCH succeeds, the dashboard shows the value, and the call still sounds flat. The check refuses that combination rather than letting it ship.
 
 ---
 
@@ -408,7 +433,7 @@ Worker schedules registered at boot: `dial.tick` 60s · `dial.requeue` 30m · `a
 | Back-end | Redis | Railway plugin | **Running** |
 | Infra | Railway (api, worker, console) | `apps/*/Dockerfile` | **Deployed**, `api-production-d51a` / `console-production-e58c` |
 | Infra | CI | `.github/workflows/ci.yml` | typecheck · lint · **183 tests** · ERD check · build, on push to `main` and every PR |
-| Vendor | Vapi | — | Assistant `db67c732` *TM Voice - Atlanta PM v1*, 4 tools, ElevenLabs voice. **0 phone numbers imported** |
+| Vendor | Vapi | — | Assistant `db67c732` *TM Voice - Atlanta PM v1*, 4 tools. Voice and opening line now reconciled from this repo by `vapi.syncAssistant` (§9.1); the profile has **not** yet been applied to the live assistant. **0 phone numbers imported** |
 | Vendor | Telnyx | — | App `tm-voice-production` (`3047698443645487069`), API v2, Call Cost on. **0 DIDs, balance $5, KYC pending** |
 | Vendor | Microsoft Graph | — | Certificate set and uploaded to Entra; expires 2028-09-12 |
 | Vendor | Housecall Pro | — | Client built. 8 employees, company windows Mon–Fri 08:00–16:00, jobs paged at 200. Webhook signing secret not yet configured |

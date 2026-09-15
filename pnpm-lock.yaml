@@ -12,6 +12,9 @@ importers:
 
   .:
     devDependencies:
+      '@tm/adapters':
+        specifier: workspace:*
+        version: link:packages/adapters
       '@tm/db':
         specifier: workspace:*
         version: link:packages/db

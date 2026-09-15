@@ -15,18 +15,21 @@
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
     "erd:check": "tsx scripts/erd-check.ts",
-    "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm erd:check && pnpm build",
+    "voice:check": "tsx scripts/voice-check.ts",
+    "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm erd:check && pnpm voice:check && pnpm build",
     "db:generate": "pnpm --filter @tm/db generate",
     "db:migrate": "pnpm --filter @tm/db migrate",
     "db:seed": "pnpm --filter @tm/db seed",
     "replay": "pnpm --filter @tm/worker replay",
-    "erd:write": "tsx scripts/erd-check.ts --write"
+    "erd:write": "tsx scripts/erd-check.ts --write",
+    "voice:write": "tsx scripts/voice-check.ts --write"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.11",
+    "@tm/adapters": "workspace:*",
     "@tm/db": "workspace:*",
     "drizzle-orm": "^0.45.2"
   }

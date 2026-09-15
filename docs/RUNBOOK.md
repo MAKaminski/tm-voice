@@ -72,7 +72,7 @@ there disagree, `docs/CREDENTIALS.md` wins.
 | 3 | `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY` | https://portal.telnyx.com/#/app/api-keys · https://portal.telnyx.com/#/app/next/call-control/applications · https://portal.telnyx.com/#/app/account/public-key | `TELNYX_CONNECTION_ID` is the **Application ID** of a Voice API Application, *not* a SIP Connection — `#/app/connections` is the wrong page. $10 top-up; KYC → Verified (Account Settings → Account Level); buy first DID at https://portal.telnyx.com/#/app/numbers/search-numbers and submit to https://www.freecallerregistry.com/fcr/ |
 | 4 | `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`, `VAPI_ASSISTANT_ID` | https://dashboard.vapi.ai/org/api-keys · **you invent the secret** · https://dashboard.vapi.ai/assistants | `VAPI_WEBHOOK_SECRET` is not on any page: generate a string, put it in a Vapi *Bearer Token* Custom Credential selected under Assistant → Advanced → Webhook Server → Authorization, and paste the same string here. Vapi sends it as `X-Vapi-Secret`. The assistant's `firstMessage` must equal `SCRIPT_VERSION.disclosure_line` — the seeded *Riley* demo assistant does not. Server URL = `https://<api-domain>/tools`. BYO keys for Deepgram/ElevenLabs/LLM under Provider Keys. |
 | 5 | `DEEPGRAM_API_KEY` | https://console.deepgram.com/ → project → API Keys | Member role. |
-| 6 | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | https://elevenlabs.io/app/settings/api-keys · https://elevenlabs.io/app/voice-library | Scope to TTS. Flash model. |
+| 6 | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | https://elevenlabs.io/app/settings/api-keys · https://elevenlabs.io/app/voice-library | Scope the key to TTS and put it in Vapi's Provider Keys. `ELEVENLABS_VOICE_ID` is different: our code reads it and `vapi.syncAssistant` writes it onto the assistant. Pick a voice whose natural read is warm — tuning lifts a voice, it does not rewrite its character. The model and the stability/style/speed settings are **not** picked here; they are checked in at `packages/adapters/src/vapi/voice.ts`. |
 | 7 | `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL` | https://console.anthropic.com/settings/keys (or https://platform.openai.com/api-keys) | $5 prepay; mini tier. |
 | 8 | `RESEND_API_KEY`, `MAIL_FROM` | https://resend.com/api-keys · https://resend.com/domains | Add domain `mail.transparentmaintenance.com`; paste DKIM/SPF at your DNS host; root `_dmarc` `p=reject`. Key scoped `sending_access` to that domain. |
 | 9 | `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_CERT_PEM`, `MS_BOOKING_MAILBOX` | https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade → New registration `tm-voice-agent` → API permissions → Graph → Application → `Calendars.ReadWrite` → Grant admin consent; Certificates → upload | Create shared mailbox `booking@transparentmaintenance.com` at https://admin.exchange.microsoft.com/#/mailboxes; scope with `New-ManagementRoleAssignment` (RBAC for Applications) to that mailbox only. |
@@ -94,8 +94,9 @@ Procedure and per-vendor rotation URLs: **`docs/CREDENTIALS.md` § Rotation**. A
    Only the dial-path keys are required to leave `dry_run`: `TELNYX_API_KEY`,
    `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY`, `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`,
    `VAPI_ASSISTANT_ID`, `DNC_API_KEY` (dropped from the set when `DNC_SCRUB=off`). Every other vendor stays mocked and is listed in a boot
-   warning plus `/health`. Deepgram, ElevenLabs and the LLM are configured inside Vapi's own
-   Provider Keys, not here. Prerequisites in the database before a campaign can run:
+   warning plus `/health`. Deepgram, the ElevenLabs API key and the LLM are configured inside Vapi's
+   own Provider Keys, not here; `ELEVENLABS_VOICE_ID` is the exception and is read by
+   `vapi.syncAssistant`. Prerequisites in the database before a campaign can run:
    a `SCRIPT_VERSION` row (`campaign.script_version_id` is NOT NULL), a `DID` row for the number
    you bought, and a `campaign` with `apollo_saved_search_id` set and `status='active'` so
    `apollo.syncCampaign` can fill the queue.
