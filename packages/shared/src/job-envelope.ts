@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const QUEUES = ["dial", "postcall", "hcp", "graph", "resend", "apollo", "availability", "retention"] as const;
+export const QUEUES = ["dial", "postcall", "hcp", "graph", "resend", "apollo", "availability", "retention", "vapi"] as const;
 export type QueueName = (typeof QUEUES)[number];
 export const DLQ_NAME = "dead";
 

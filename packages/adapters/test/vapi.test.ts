@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createVapiAdapter } from "../src/index.js";
+import { VOICE_PROFILE, createVapiAdapter, vapiVoiceBlock } from "../src/index.js";
 import { realConfig, stubFetch } from "./helpers.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -75,5 +75,53 @@ describe("vapi real adapter", () => {
     await expect(createVapiAdapter(realConfig()).getCall("c")).resolves.toMatchObject({ recording_url: "https://r.vapi/s.wav" });
     stubFetch(() => ({ json: { id: "c" } }));
     await expect(createVapiAdapter(realConfig()).getCall("c")).resolves.toEqual({ id: "c", status: "unknown", recording_url: undefined, transcript: undefined });
+  });
+});
+
+const DISCLOSURE = "Hi, this is an automated assistant using an artificial voice.";
+const desired = { firstMessage: DISCLOSURE, voice: vapiVoiceBlock("voice_joe") };
+
+describe("vapi assistant sync", () => {
+  it("PATCHes only the opening line and the voice block", async () => {
+    const calls = stubFetch(() => ({ json: { id: "asst_1" } }));
+    await expect(createVapiAdapter(realConfig()).updateAssistant("asst_1", desired))
+      .resolves.toEqual({ id: "asst_1", synthetic: false });
+    expect(calls[0]!.method).toBe("PATCH");
+    expect(calls[0]!.url).toBe("https://api.vapi.ai/assistant/asst_1");
+    expect(JSON.parse(calls[0]!.body!)).toEqual({
+      firstMessage: DISCLOSURE,
+      voice: { provider: "11labs", voiceId: "voice_joe", ...VOICE_PROFILE },
+    });
+  });
+
+  it("sends no model, tools or transcriber, so dashboard config survives a sync", async () => {
+    const calls = stubFetch(() => ({ json: { id: "asst_1" } }));
+    await createVapiAdapter(realConfig()).updateAssistant("asst_1", desired);
+    expect(Object.keys(JSON.parse(calls[0]!.body!))).toEqual(["firstMessage", "voice"]);
+  });
+
+  it("refuses an out-of-range profile before it reaches the network", async () => {
+    const calls = stubFetch(() => ({ json: {} }));
+    const bad = { firstMessage: DISCLOSURE, voice: { ...desired.voice, speed: 2 } };
+    await expect(createVapiAdapter(realConfig()).updateAssistant("asst_1", bad))
+      .rejects.toMatchObject({ code: "invalid_input", retryable: false });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("reads back the two owned fields", async () => {
+    const calls = stubFetch(() => ({ json: { id: "asst_1", firstMessage: DISCLOSURE, voice: { provider: "11labs", stability: 0.9 } } }));
+    await expect(createVapiAdapter(realConfig()).getAssistant("asst_1")).resolves.toEqual({
+      id: "asst_1", firstMessage: DISCLOSURE, voice: { provider: "11labs", stability: 0.9 },
+    });
+    expect(calls[0]!.url).toBe("https://api.vapi.ai/assistant/asst_1");
+  });
+
+  it("records the PATCH instead of sending it in dry_run", async () => {
+    const calls = stubFetch(() => ({ json: {} }));
+    const v = createVapiAdapter(realConfig({ DIAL_MODE: "dry_run" }));
+    expect(v.mode).toBe("mock");
+    await expect(v.updateAssistant("asst_1", desired)).resolves.toEqual({ id: "asst_1", synthetic: true });
+    expect(calls).toHaveLength(0);
+    expect(v.mock!.calls.at(-1)).toMatchObject({ method: "updateAssistant", args: ["asst_1", desired] });
   });
 });

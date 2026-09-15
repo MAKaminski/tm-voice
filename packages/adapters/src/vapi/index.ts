@@ -2,6 +2,9 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { AdapterError, type Config } from "@tm/shared";
 import { z } from "zod";
 import { type Adapter, MockRecorder, assertDialAllowed, e164, request, useMock, validate } from "../base.js";
+import { vapiVoiceSchema } from "./voice.js";
+
+export * from "./voice.js";
 
 const API = "https://api.vapi.ai";
 
@@ -13,9 +16,31 @@ export const outboundCallInput = z.object({
 });
 export type OutboundCallInput = z.infer<typeof outboundCallInput>;
 
+/**
+ * The part of the assistant this repo owns: the fixed opening line (CLAUDE.md rule 10) and the
+ * voice tuning. Everything else on the assistant — model, tools, transcriber — is left alone, so
+ * a sync never clobbers dashboard work outside these two fields.
+ */
+export const assistantDesiredState = z.object({
+  firstMessage: z.string().min(1),
+  voice: vapiVoiceSchema,
+});
+export type AssistantDesiredState = z.infer<typeof assistantDesiredState>;
+
 export interface VapiAdapter extends Adapter {
   createOutboundCall(input: OutboundCallInput): Promise<{ id: string; synthetic: boolean }>;
   getCall(id: string): Promise<{ id: string; status: string; recording_url?: string; transcript?: unknown }>;
+  /** Reads back the two fields `updateAssistant` owns, so a sync can tell drift from a no-op. */
+  getAssistant(id: string): Promise<{ id: string; firstMessage?: string; voice?: Record<string, unknown> }>;
+  /**
+   * PATCHes the assistant's opening line and voice block. Partial: unnamed fields are untouched.
+   *
+   * On rule 3 ("no code path reaches Vapi without a passing gate"): this one carries no contact and
+   * places no call, so there is no CALL_TASK to gate. The gate answers "may we dial this person";
+   * this answers "how should the agent sound when we do". `assertDialAllowed` stays on the dial
+   * methods only — putting it here would make configuring the voice require a dialable prospect.
+   */
+  updateAssistant(id: string, desired: AssistantDesiredState): Promise<{ id: string; synthetic: boolean }>;
   /**
    * Verifies a Vapi server webhook. Vapi sends the configured server secret as `x-vapi-secret`;
    * an HMAC-SHA256 in `x-vapi-signature` is also accepted for forward compatibility.
@@ -47,6 +72,13 @@ export function createVapiAdapter(cfg: Config): VapiAdapter & { mock?: MockRecor
         return { id: `dryrun_${v.metadata.call_task_id}`, synthetic: true };
       },
       async getCall(id) { mock.record("getCall", id); return { id, status: "ended" }; },
+      async getAssistant(id) { mock.record("getAssistant", id); return { id }; },
+      async updateAssistant(id, desired) {
+        const v = validate("vapi", assistantDesiredState, desired);
+        mock.record("updateAssistant", id, v);
+        // dry_run never mutates a live assistant; the recorder is what the test and the log read.
+        return { id, synthetic: true };
+      },
       verifyWebhook(h, body) { return webhookOk(secret, h, body); },
     };
   }
@@ -104,6 +136,19 @@ export function createVapiAdapter(cfg: Config): VapiAdapter & { mock?: MockRecor
         recording_url: res.artifact?.recordingUrl ?? res.artifact?.stereoRecordingUrl,
         transcript: res.artifact?.transcript,
       };
+    },
+    async getAssistant(id) {
+      const res = await request<{ id?: string; firstMessage?: string; voice?: Record<string, unknown> }>({
+        vendor: "vapi", url: `${API}/assistant/${encodeURIComponent(id)}`, headers: auth,
+      });
+      return { id: res.id ?? id, firstMessage: res.firstMessage, voice: res.voice };
+    },
+    async updateAssistant(id, desired) {
+      const v = validate("vapi", assistantDesiredState, desired);
+      const res = await request<{ id?: string }>({
+        vendor: "vapi", method: "PATCH", url: `${API}/assistant/${encodeURIComponent(id)}`, headers: auth, body: v,
+      });
+      return { id: res.id ?? id, synthetic: false };
     },
     verifyWebhook(h, body) { return webhookOk(cfg.VAPI_WEBHOOK_SECRET!, h, body); },
   };
