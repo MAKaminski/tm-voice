@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { booking, campaign, contact, serviceAddress, technician } from "@tm/db";
+import { logger } from "@tm/shared";
 
 import type { AppEnv } from "../app.js";
 import { createBooking, enqueueFulfillment } from "../booking-core.js";
@@ -75,6 +76,27 @@ export function bookingRoutes() {
   app.get("/campaigns", internalAuth, async (c) => {
     const { db } = c.get("deps");
     return c.json({ campaigns: await db.select().from(campaign).orderBy(desc(campaign.createdAt)) });
+  });
+
+  /**
+   * Stop dialling. Until this existed the only way to halt a campaign mid-flight was a Railway
+   * environment change or a hand-edited database row — which is not something you want to be
+   * working out while a bad list is being dialled.
+   *
+   * It is effective because the pre-dial gate now refuses to claim a task whose campaign is not
+   * active: pausing here stops the next claim, including one from a replayed dial.claim job.
+   * Calls already in flight are not hung up, which is deliberate — dropping a live call on a
+   * prospect mid-sentence is worse than letting it finish.
+   */
+  app.patch("/campaigns/:id", internalAuth, async (c) => {
+    const { db } = c.get("deps");
+    const body = z.object({ status: z.enum(["draft", "active", "paused", "completed"]) }).safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ error: "invalid_body" }, 400);
+    const [row] = await db.update(campaign).set({ status: body.data.status, updatedAt: new Date() })
+      .where(eq(campaign.id, c.req.param("id"))).returning();
+    if (!row) return c.json({ error: "not_found" }, 404);
+    logger.warn({ campaign_id: row.id, status: row.status }, "campaign status changed from the console");
+    return c.json({ campaign: row });
   });
   return app;
 }
