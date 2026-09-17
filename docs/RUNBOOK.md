@@ -70,7 +70,7 @@ there disagree, `docs/CREDENTIALS.md` wins.
 | 1 | `HCP_API_KEY` | https://pro.housecallpro.com/pro/settings/api | Set and verified (Bearer). Webhooks are optional until a signing secret exists — see `docs/CREDENTIALS.md`. Each account you want the agent to book for needs `account.hcp_customer_id`; `createJob` refuses without it. |
 | 2 | `APOLLO_API_KEY` | https://app.apollo.io/#/settings/integrations/api | Master key. |
 | 3 | `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY` | https://portal.telnyx.com/#/app/api-keys · https://portal.telnyx.com/#/app/next/call-control/applications · https://portal.telnyx.com/#/app/account/public-key | `TELNYX_CONNECTION_ID` is the **Application ID** of a Voice API Application, *not* a SIP Connection — `#/app/connections` is the wrong page. $10 top-up; KYC → Verified (Account Settings → Account Level); buy first DID at https://portal.telnyx.com/#/app/numbers/search-numbers and submit to https://www.freecallerregistry.com/fcr/ |
-| 4 | `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`, `VAPI_ASSISTANT_ID` | https://dashboard.vapi.ai/org/api-keys · **you invent the secret** · https://dashboard.vapi.ai/assistants | `VAPI_WEBHOOK_SECRET` is not on any page: generate a string, put it in a Vapi *Bearer Token* Custom Credential selected under Assistant → Advanced → Webhook Server → Authorization, and paste the same string here. Vapi sends it as `X-Vapi-Secret`. The assistant's `firstMessage` must equal `SCRIPT_VERSION.disclosure_line` — the seeded *Riley* demo assistant does not. Server URL = `https://<api-domain>/tools`. BYO keys for Deepgram/ElevenLabs/LLM under Provider Keys. |
+| 4 | `VAPI_PRIVATE_KEY`, `VAPI_WEBHOOK_SECRET`, `VAPI_ASSISTANT_ID` | https://dashboard.vapi.ai/org/api-keys · **you invent the secret** · https://dashboard.vapi.ai/assistants | `VAPI_WEBHOOK_SECRET` is not on any page: generate a string, put it in a Vapi *Bearer Token* Custom Credential selected under Assistant → Advanced → Webhook Server → Authorization, and paste the same string here. Vapi sends it as `X-Vapi-Secret`. The assistant's `firstMessage` must equal `SCRIPT_VERSION.disclosure_line` — the seeded *Riley* demo assistant does not. **Server URL = `https://<api-domain>/webhooks/vapi`** — assistant-level, and NOT `/tools`. The per-tool URLs are `/tools/<tool_name>`. Setting the assistant's Server URL to `/tools` sends every end-of-call report to a 404 and the post-call pipeline never runs; see `docs/CREDENTIALS.md` § two URLs. BYO keys for Deepgram/ElevenLabs/LLM under Provider Keys. |
 | 5 | `DEEPGRAM_API_KEY` | https://console.deepgram.com/ → project → API Keys | Member role. |
 | 6 | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | https://elevenlabs.io/app/settings/api-keys · https://elevenlabs.io/app/voice-library | Scope the key to TTS and put it in Vapi's Provider Keys. `ELEVENLABS_VOICE_ID` is different: our code reads it and `vapi.syncAssistant` writes it onto the assistant. Pick a voice whose natural read is warm — tuning lifts a voice, it does not rewrite its character. The model and the stability/style/speed settings are **not** picked here; they are checked in at `packages/adapters/src/vapi/voice.ts`. |
 | 7 | `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL` | https://console.anthropic.com/settings/keys (or https://platform.openai.com/api-keys) | $5 prepay; mini tier. |
@@ -119,6 +119,59 @@ Procedure and per-vendor rotation URLs: **`docs/CREDENTIALS.md` § Rotation**. A
 | Fixed | $125/mo (Railway $20, Telnyx channels $50, DIDs $10, Resend $20, caller-ID reg $25) | invoices |
 
 Blended assumption $0.095/min → $0.063/dial at 5,000 dials/mo; $1/call line at ~2,000 dials/mo. `call.cost_usd` is populated in Phase 5 from vendor usage so this table can be replaced with measurements.
+
+## 7b. Changing how Joe behaves on a call
+
+The opening line, the voice, the system prompt and the call-handling settings all live in this repo
+and are pushed to Vapi by the `vapi.syncAssistant` job (`docs/ARCHITECTURE.md` § 9.1). Editing them
+in the Vapi dashboard does not work: the sync reverts the edit within a day and logs the revert.
+
+| To change | Edit | Takes effect |
+|---|---|---|
+| What Joe says first | a **new** `script_version` row, then mark it active | next sync |
+| How Joe sounds | `packages/adapters/src/vapi/voice.ts` | next sync |
+| How Joe behaves — turn-taking, email read-back, what he is trying to achieve | `packages/adapters/src/vapi/conversation.ts` | next sync |
+| Ambient noise, interruption handling, silence and call-length limits | `SPEECH_PLAN` in `conversation.ts` | next sync |
+| Which LLM, which transcriber, which tools exist | Vapi dashboard — not owned here | immediately |
+
+**The sync only writes for real outside `dry_run`.** In `DIAL_MODE=dry_run` the vapi adapter is a
+mock, so `updateAssistant` records the PATCH it *would* have sent and the live assistant is not
+touched. A behaviour fix merged while the system is in `dry_run` reaches a real call only once the
+mode is `verified_only` or `live`.
+
+The job runs every 24h and on worker boot, so a deploy is usually enough. To force it, restart the
+worker. To see what it would do without waiting, the drift list is in the worker log line
+`vapi assistant reconciled to the checked-in profile`.
+
+**If a caller still reports background noise** after a sync has run with `backgroundSound: "off"`,
+the remaining suspect is the ElevenLabs voice itself — a voice cloned from a recording with room
+noise carries that noise into every render. That is a different fix: a new `ELEVENLABS_VOICE_ID`,
+not a settings change. Check it by generating a sample in the ElevenLabs dashboard with no Vapi in
+the path.
+
+**If a caller reports long silences**, check in this order: (1) `silenceTimeoutSeconds` in
+`SPEECH_PLAN` — Joe should break a silence before it reads as a dropped call; (2) the worker log for
+`vapi called a tool with no route on this service`, which means the dashboard has a tool the api
+does not implement and the catch-all is covering for it; (3) the model configured in the dashboard,
+which the repo does not own.
+
+## 7c. Working the review queue
+
+`AUTO_BOOK` is settled `false`, so every booking the agent creates waits for a person. That person
+uses `/review` on the console: pending bookings with approve and reject, and a **stop dialling**
+button per campaign.
+
+| Thing | Where | Note |
+|---|---|---|
+| Approve / reject a booking | `/review` | Approving queues three jobs — the Housecall Pro job, the calendar invite and the packet email. Each can still fail afterwards, and those failure states have no screen yet: check `calendar_invite.rsvp_status` and `email_send.status`. |
+| Stop a campaign mid-flight | `/review` → Stop dialling | Stops the **next** call. A call already in progress finishes; nothing hangs up a live call on a prospect. |
+| Resume | `/review` → Resume | Dialling picks up on the next `dial.tick`, within 60s. |
+
+**The console has no authentication.** None — no session, no login, no middleware. So the reviewer
+types their name and `booking.reviewed_by` records what they typed. That is good enough for two or
+three people who trust each other and is not an audit trail; before this is used by anyone else,
+the console needs real auth. It is the largest known gap in this system that is not a vendor
+dependency.
 
 ## 8. Operations
 

@@ -1,11 +1,14 @@
 import { eq } from "drizzle-orm";
-import { type AssistantDesiredState, VOICE_PROFILE, vapiVoiceBlock } from "@tm/adapters";
+import {
+  type AssistantDesiredState, BACKGROUND_SOUND, type LiveAssistant, RECORDING_ENABLED, SPEECH_PLAN, VOICE_PROFILE,
+  buildSystemPrompt, systemPromptOf, vapiVoiceBlock,
+} from "@tm/adapters";
 import { scriptVersion } from "@tm/db";
 import { logger } from "@tm/shared";
 import type { Ctx, Processor } from "../context.js";
 
-/** Fields the sync owns. Anything else on the assistant is dashboard territory and left untouched. */
-const OWNED = ["provider", "voiceId", "model", "stability", "similarityBoost", "style", "useSpeakerBoost", "speed"] as const;
+/** Voice fields the sync owns. Anything not listed here or below is dashboard territory. */
+const OWNED_VOICE = ["provider", "voiceId", "model", "stability", "similarityBoost", "style", "useSpeakerBoost", "speed"] as const;
 
 /**
  * Builds what the Vapi assistant should look like: the active SCRIPT_VERSION's disclosure line
@@ -18,24 +21,41 @@ export async function desiredAssistant(ctx: Ctx): Promise<AssistantDesiredState>
   const voiceId = ctx.cfg.ELEVENLABS_VOICE_ID;
   if (!voiceId) throw new Error("vapi.syncAssistant requires ELEVENLABS_VOICE_ID (which voice Joe is)");
 
-  const active = await ctx.db.select({ id: scriptVersion.id, line: scriptVersion.disclosureLine })
+  const active = await ctx.db.select({ id: scriptVersion.id, line: scriptVersion.disclosureLine, body: scriptVersion.body })
     .from(scriptVersion).where(eq(scriptVersion.active, true));
   if (active.length !== 1) {
     throw new Error(`expected exactly 1 active script_version, found ${active.length}; refusing to guess the opening line`);
   }
-  return { firstMessage: active[0]!.line, voice: vapiVoiceBlock(voiceId, VOICE_PROFILE) };
+  const row = active[0]!;
+  return {
+    firstMessage: row.line,
+    voice: vapiVoiceBlock(voiceId, VOICE_PROFILE),
+    systemPrompt: buildSystemPrompt({ disclosureLine: row.line, scriptBody: row.body }),
+    backgroundSound: BACKGROUND_SOUND,
+    speech: SPEECH_PLAN,
+    recordingEnabled: RECORDING_ENABLED,
+  };
 }
 
 /** Field-by-field diff of the owned surface, so the log names what drifted rather than "changed". */
-export function assistantDrift(
-  desired: AssistantDesiredState,
-  live: { firstMessage?: string; voice?: Record<string, unknown> },
-): string[] {
+export function assistantDrift(desired: AssistantDesiredState, live: LiveAssistant): string[] {
   const drift: string[] = [];
   if (live.firstMessage !== desired.firstMessage) drift.push("firstMessage");
-  for (const k of OWNED) {
+  for (const k of OWNED_VOICE) {
     if (live.voice?.[k] !== (desired.voice as Record<string, unknown>)[k]) drift.push(`voice.${k}`);
   }
+  // The prompt is the field most likely to be edited in the dashboard mid-incident, so it is
+  // compared in full rather than by length or hash — a one-line edit still shows up as drift.
+  if (systemPromptOf(live) !== desired.systemPrompt) drift.push("systemPrompt");
+  if (live.backgroundSound !== desired.backgroundSound) drift.push("backgroundSound");
+  // Recording off is the one drift with a compliance consequence: the disclosure line says the
+  // call is being recorded, so an assistant with it switched off makes the agent say something untrue.
+  if (live.artifactPlan?.recordingEnabled !== desired.recordingEnabled) drift.push("artifactPlan.recordingEnabled");
+  if (live.silenceTimeoutSeconds !== desired.speech.silenceTimeoutSeconds) drift.push("silenceTimeoutSeconds");
+  if (live.maxDurationSeconds !== desired.speech.maxDurationSeconds) drift.push("maxDurationSeconds");
+  if (live.startSpeakingPlan?.["waitSeconds"] !== desired.speech.startWaitSeconds) drift.push("startSpeakingPlan.waitSeconds");
+  if (live.stopSpeakingPlan?.["numWords"] !== desired.speech.interruptWords) drift.push("stopSpeakingPlan.numWords");
+  if (live.stopSpeakingPlan?.["backoffSeconds"] !== desired.speech.interruptBackoffSeconds) drift.push("stopSpeakingPlan.backoffSeconds");
   return drift;
 }
 
@@ -60,7 +80,8 @@ export const vapiSyncAssistant: Processor = async (ctx) => {
   const drift = assistantDrift(desired, live);
   if (!drift.length) return { assistant_id: assistantId, in_sync: true };
 
-  const res = await ctx.adapters.vapi.updateAssistant(assistantId, desired);
+  // `live` is handed over so the PATCH merges the model object and keeps the tool wiring.
+  const res = await ctx.adapters.vapi.updateAssistant(assistantId, desired, live);
   logger.info({ assistant_id: assistantId, drift, synthetic: res.synthetic }, "vapi assistant reconciled to the checked-in profile");
   return { assistant_id: assistantId, in_sync: false, drift, synthetic: res.synthetic };
 };

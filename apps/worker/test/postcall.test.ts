@@ -12,12 +12,16 @@ const cfg = loadConfig({ DATABASE_URL: "x", INTERNAL_API_TOKEN: "0123456789abcde
 let t: Awaited<ReturnType<typeof createTestDb>>;
 let ctx: Ctx;
 let taskId: string;
+const enqueued: { job: string; payload: Record<string, unknown> }[] = [];
 const env = (id: string) => ({ entity_id: id, idempotency_key: `postcall:${id}`, attempt: 0, enqueued_at: new Date().toISOString() });
 
 beforeAll(async () => {
   t = await createTestDb();
   const r = await seed(t.db);
-  ctx = { cfg, db: t.db, adapters: createAdapters(cfg), producer: createProducer(undefined, async () => {}) };
+  ctx = {
+    cfg, db: t.db, adapters: createAdapters(cfg),
+    producer: createProducer(undefined, async (q, n, payload) => { enqueued.push({ job: `${q}.${n}`, payload }); }),
+  };
   const dana = r.contacts.find((x) => x.phoneE164 === SEED.phones.landlineGa)!;
   const [task] = await t.db.select().from(callTask).where(eq(callTask.contactId, dana.id));
   taskId = task!.id;
@@ -112,5 +116,36 @@ describe("postcall.process", () => {
 
   it("ignores a report for a call we never placed", async () => {
     expect(await postcallProcess(ctx, { ...env("nope"), vapi_call_id: "nope", ended_reason: "voicemail", turns: [] })).toEqual({ skipped: "unknown_call" });
+  });
+});
+
+describe("handing the recording off", () => {
+  it("queues one postcall.recording job when the report carried a url", async () => {
+    await t.db.insert(call).values({ callTaskId: taskId, vapiCallId: "vapi_rec_handoff" });
+    const before = enqueued.length;
+    await postcallProcess(ctx, {
+      ...env("vapi_rec_handoff"), vapi_call_id: "vapi_rec_handoff", ended_reason: "customer-ended-call",
+      recording_url: "https://storage.vapi.ai/x.wav", turns: [],
+    });
+    const jobs = enqueued.slice(before).filter((e) => e.job === "postcall.recording");
+    // Separate job, not an inline step: a transient R2 or Vapi failure must not re-run the
+    // disposition logic, and the url is short-lived so this is the step that needs retries.
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.payload).toMatchObject({
+      vapi_call_id: "vapi_rec_handoff",
+      recording_url: "https://storage.vapi.ai/x.wav",
+      idempotency_key: "postcall:recording:vapi_rec_handoff",
+    });
+  });
+
+  it("queues nothing when there was no recording, and still writes the disposition", async () => {
+    await t.db.insert(call).values({ callTaskId: taskId, vapiCallId: "vapi_no_rec" });
+    const before = enqueued.length;
+    const out = await postcallProcess(ctx, {
+      ...env("vapi_no_rec"), vapi_call_id: "vapi_no_rec", ended_reason: "customer-ended-call", turns: [],
+    }) as { disposition?: string };
+    expect(enqueued.slice(before).filter((e) => e.job === "postcall.recording")).toHaveLength(0);
+    // A missing recording is logged, never fatal — the disposition is the part that matters.
+    expect(out.disposition).toBeDefined();
   });
 });

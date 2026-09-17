@@ -66,8 +66,27 @@ Dashboard: <https://dashboard.vapi.ai/>
 | `ELEVENLABS_VOICE_ID` | <https://elevenlabs.io/app/voice-library> | **Read by our code.** `vapi.syncAssistant` puts it in the assistant's voice block, so this is which voice the agent *is*. How it *sounds* is not here: that tuning is checked in at `packages/adapters/src/vapi/voice.ts` and reviewed as a diff (`docs/ARCHITECTURE.md` §9.1). Changing this variable swaps the voice on the next sync; unset it and the sync stops and logs rather than dialling voiceless. |
 | `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL` **→ Vapi** | <https://console.anthropic.com/settings/keys> | Provider Keys inside Vapi. A blank value here crash-loops the api — see "blank is not unset" below. |
 
-Server URL is `https://<api-domain>/tools`. Org-wide default lives at Dashboard → Settings →
-General Settings; the assistant-level value overrides it.
+### Two URLs, and getting them the wrong way round silently kills the post-call pipeline
+
+Vapi has two separate places a URL goes, and they are not interchangeable:
+
+| Vapi setting | Value | What arrives there |
+|---|---|---|
+| **Assistant → Advanced → Webhook Server → Server URL** | `https://<api-domain>/webhooks/vapi` | `end-of-call-report`, and every other assistant-level server message |
+| **Each function tool's own Server URL** | `https://<api-domain>/tools/<tool_name>` | that tool's calls, e.g. `/tools/capture_contact` |
+
+**This document previously said the Server URL was `https://<api-domain>/tools`. That was wrong.**
+Set that way, every end-of-call report POSTs to `/tools`, matches no tool route, and 404s — so
+`postcall.process` never runs and **nothing records the disposition, transcript, cost, retry
+schedule or opt-out for any call**. Nothing alerts, because from the api's side a 404 on an
+unknown tool path is indistinguishable from a misconfigured tool.
+
+If you have ever set the Server URL to `/tools`, **check it now**, and assume no call before the
+correction was recorded. The `/tools` catch-all logs a named error
+(`vapi end-of-call report arrived on /tools`) if it happens again.
+
+Org-wide default lives at Dashboard → Settings → General Settings; the assistant-level value
+overrides it.
 
 ## Everything else
 

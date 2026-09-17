@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { VOICE_PROFILE, createAdapters, vapiVoiceBlock } from "@tm/adapters";
+import { type AssistantDesiredState, SPEECH_PLAN, VOICE_PROFILE, createAdapters, vapiVoiceBlock } from "@tm/adapters";
 import { createProducer } from "@tm/api";
 import { DISCLOSURE_LINE, scriptVersion, seed } from "@tm/db";
 import { createTestDb } from "@tm/db/test";
@@ -29,6 +29,40 @@ beforeEach(async () => {
   await t.db.update(scriptVersion).set({ active: false });
   await t.db.update(scriptVersion).set({ active: true }).where(eq(scriptVersion.name, "v1-atlanta-pm"));
 });
+
+/** The reviewed desired state, as a fixture. */
+const desired: AssistantDesiredState = {
+  firstMessage: "Hello.",
+  voice: vapiVoiceBlock("voice_joe"),
+  systemPrompt: "You are Joe.",
+  backgroundSound: "off",
+  speech: SPEECH_PLAN,
+  recordingEnabled: true,
+};
+
+/**
+ * A live assistant that matches a desired state on every owned field, plus the dashboard-owned
+ * bits the sync must not touch. Built from `d` rather than hardcoded, so a test that changes the
+ * desired state does not accidentally assert against a stale "in sync" shape.
+ */
+function liveFrom(d: AssistantDesiredState, id = "asst_1") {
+  return {
+    id,
+    firstMessage: d.firstMessage,
+    voice: { ...d.voice },
+    backgroundSound: d.backgroundSound,
+    artifactPlan: { recordingEnabled: d.recordingEnabled, transcriptPlan: { enabled: true } },
+    model: {
+      provider: "openai", model: "gpt-4o", toolIds: ["tool_book", "tool_optout"],
+      messages: [{ role: "system", content: d.systemPrompt }],
+    },
+    silenceTimeoutSeconds: d.speech.silenceTimeoutSeconds,
+    maxDurationSeconds: d.speech.maxDurationSeconds,
+    startSpeakingPlan: { waitSeconds: d.speech.startWaitSeconds },
+    stopSpeakingPlan: { numWords: d.speech.interruptWords, backoffSeconds: d.speech.interruptBackoffSeconds },
+  };
+}
+const inSync = () => liveFrom(desired);
 
 describe("desiredAssistant", () => {
   it("takes the opening line from the active script version, verbatim", async () => {
@@ -59,23 +93,35 @@ describe("desiredAssistant", () => {
 });
 
 describe("assistantDrift", () => {
-  const desired = { firstMessage: "Hello.", voice: vapiVoiceBlock("voice_joe") };
-
   it("reports nothing when the live assistant already matches", () => {
-    expect(assistantDrift(desired, { firstMessage: "Hello.", voice: { ...desired.voice } })).toEqual([]);
+    expect(assistantDrift(desired, inSync())).toEqual([]);
   });
 
   it("names the settings that differ, not just that something did", () => {
-    const live = { firstMessage: "Hello.", voice: { ...desired.voice, stability: 0.9, style: 0 } };
+    const live = { ...inSync(), voice: { ...desired.voice, stability: 0.9, style: 0 } };
     expect(assistantDrift(desired, live)).toEqual(["voice.stability", "voice.style"]);
   });
 
   it("catches a paraphrased opening line", () => {
-    expect(assistantDrift(desired, { firstMessage: "Hi there.", voice: { ...desired.voice } })).toContain("firstMessage");
+    expect(assistantDrift(desired, { ...inSync(), firstMessage: "Hi there." })).toContain("firstMessage");
   });
 
-  it("treats a missing voice block as full drift", () => {
-    expect(assistantDrift(desired, {})).toHaveLength(9);
+  it("treats a bare assistant as full drift across every owned field", () => {
+    // 1 opening line + 8 voice fields + prompt + backgroundSound + recording + 5 speech fields.
+    expect(assistantDrift(desired, { id: "asst_1" })).toHaveLength(17);
+  });
+
+  it("catches recording being switched off, which makes the disclosure line untrue", () => {
+    const live = { ...inSync(), artifactPlan: { recordingEnabled: false } };
+    expect(assistantDrift(desired, live)).toEqual(["artifactPlan.recordingEnabled"]);
+  });
+
+  it("catches the two settings Joe's call actually tripped over", () => {
+    // Ambient office noise left on, and a prompt edited in the dashboard.
+    const live = { ...inSync(), backgroundSound: "office" };
+    expect(assistantDrift(desired, live)).toEqual(["backgroundSound"]);
+    const edited = { ...inSync(), model: { messages: [{ role: "system", content: "You are Joe. Always push the packet." }] } };
+    expect(assistantDrift(desired, edited)).toEqual(["systemPrompt"]);
   });
 });
 
@@ -97,8 +143,8 @@ describe("vapiSyncAssistant", () => {
 
   it("does not PATCH when the live assistant already matches", async () => {
     const c = ctxWith();
-    const desired = await desiredAssistant(c);
-    c.adapters.vapi.getAssistant = async (id: string) => ({ id, firstMessage: desired.firstMessage, voice: { ...desired.voice } });
+    const live = liveFrom(await desiredAssistant(c));
+    c.adapters.vapi.getAssistant = async (id: string) => ({ ...live, id });
     await expect(vapiSyncAssistant(c, env)).resolves.toEqual({ assistant_id: "asst_1", in_sync: true });
     expect(c.adapters.vapi.mock!.calls.filter((x) => x.method === "updateAssistant")).toHaveLength(0);
   });

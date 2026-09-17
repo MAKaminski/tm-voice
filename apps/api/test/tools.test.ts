@@ -186,7 +186,9 @@ describe("POST /tools/send_packet", () => {
     const result = (await json(res)).results[0].result;
     expect(result.sent).toBe(false);
     expect(result.reason).toBe("no_email");
-    expect(result.say).toMatch(/office follow up/);
+    // Used to dead-end with "our office will follow up"; there is now a tool that can take one.
+    expect(result.say).toMatch(/best one to send it to/);
+    expect(result.instruction).toContain("capture_contact");
   });
 });
 
@@ -221,5 +223,126 @@ describe("POST /webhooks/vapi", () => {
     const p = postcallPayloadFrom(report.message as never);
     expect(p).toMatchObject({ vapi_call_id: "vapi_call_eoc", call_task_id: "8286b444-5d54-4145-8746-e3413fa90548", ended_reason: "voicemail", cost_usd: 0.09, structured: { outcome: "voicemail" } });
     expect(p.turns).toEqual([{ role: "assistant", text: "Hi", at_sec: 1.8 }, { role: "customer", text: "Leave a message", at_sec: 9 }]);
+  });
+
+  it("carries the recording url through, which it used to drop on the floor", async () => {
+    const { postcallPayloadFrom } = await import("../src/routes/webhooks.js");
+    const withAudio = { ...report.message, artifact: { ...report.message.artifact, recordingUrl: "https://storage.vapi.ai/a.wav" } };
+    // The url arrived on every report and nothing read it, so no call recording was ever stored
+    // even though the disclosure line tells the prospect the call is being recorded.
+    expect(postcallPayloadFrom(withAudio as never)).toMatchObject({ recording_url: "https://storage.vapi.ai/a.wav" });
+  });
+
+  it("falls back to the stereo url when there is no mono one", async () => {
+    const { postcallPayloadFrom } = await import("../src/routes/webhooks.js");
+    const stereo = { ...report.message, artifact: { ...report.message.artifact, stereoRecordingUrl: "https://storage.vapi.ai/s.wav" } };
+    expect(postcallPayloadFrom(stereo as never)).toMatchObject({ recording_url: "https://storage.vapi.ai/s.wav" });
+  });
+
+  it("omits the field entirely when the report carried no recording", async () => {
+    const { postcallPayloadFrom } = await import("../src/routes/webhooks.js");
+    expect(postcallPayloadFrom(report.message as never)).not.toHaveProperty("recording_url");
+  });
+});
+
+describe("POST /tools/capture_contact", () => {
+  /** Marcus has no email on the seed, which is the state a real intake call starts from. */
+  const marcusCall = async (id: string) => {
+    const marcus = r.contacts.find((c) => c.phoneE164 === SEED.phones.wirelessGa)!;
+    const [task] = await t.db.select().from(callTask).where(eq(callTask.contactId, marcus.id));
+    return { marcus, over: { id, name: task!.id, customer: { number: marcus.phoneE164 } } };
+  };
+
+  it("writes the email onto the contact, so the next call already has it", async () => {
+    const { marcus, over } = await marcusCall("vapi_cc_1");
+    expect(marcus.email).toBeNull();
+
+    const res = await post("/tools/capture_contact", msg("capture_contact", {
+      name: "Joe McGrew", title: "Vendor Manager", email: "Joe.McGrew@Acme-Realty.com",
+    }, over));
+    const out = (await json(res)).results[0].result;
+    expect(out.captured).toBe(true);
+
+    const [after] = await t.db.select().from(contact).where(eq(contact.id, marcus.id));
+    // Lower-cased on the way in: a transcriber capitalises whatever it likes.
+    expect(after!.email).toBe("joe.mcgrew@acme-realty.com");
+  });
+
+  it("reads the address back spelled out, not as one word", async () => {
+    const { over } = await marcusCall("vapi_cc_2");
+    const res = await post("/tools/capture_contact", msg("capture_contact", { email: "a.b@c-d.com" }, over));
+    const out = (await json(res)).results[0].result;
+    // This is the fix for "when it repeats email address, you cannot understand it".
+    expect(out.say).toContain("Let me spell that:");
+    expect(out.say).toContain("dot");
+    expect(out.say).toContain("dash");
+    expect(out.say).toContain("at");
+    expect(out.instruction).toContain("letter by letter");
+    expect(out.say).toContain("Is that correct?");
+  });
+
+  it("groups a phone number instead of reading fifteen digits", async () => {
+    const { over } = await marcusCall("vapi_cc_3");
+    const res = await post("/tools/capture_contact", msg("capture_contact", { phone: "+14045550100" }, over));
+    expect((await json(res)).results[0].result.say).toContain("four zero four, five five five");
+  });
+
+  it("asks again rather than failing when it mishears the address", async () => {
+    const { over } = await marcusCall("vapi_cc_4");
+    const res = await post("/tools/capture_contact", msg("capture_contact", { email: "not an address" }, over));
+    const out = (await json(res)).results[0].result;
+    expect(out).toMatchObject({ captured: false, reason: "invalid_input" });
+    expect(out.say).toContain("say the email address again");
+  });
+
+  it("asks for something to record when handed only a name", async () => {
+    const { over } = await marcusCall("vapi_cc_5");
+    const res = await post("/tools/capture_contact", msg("capture_contact", { name: "Joe McGrew" }, over));
+    expect((await json(res)).results[0].result).toMatchObject({ captured: false, reason: "nothing_to_capture" });
+  });
+
+  it("is idempotent, so a retried webhook does not re-announce the address", async () => {
+    const { over } = await marcusCall("vapi_cc_6");
+    const body = msg("capture_contact", { email: "x@y.com" }, over);
+    const first = (await json(await post("/tools/capture_contact", body))).results[0].result;
+    const second = (await json(await post("/tools/capture_contact", body))).results[0].result;
+    expect(second).toEqual(first);
+  });
+});
+
+describe("a tool with no route", () => {
+  it("answers immediately with something sayable rather than timing out", async () => {
+    // Left unrouted, Vapi waits out its own tool timeout — ~30s of silence the caller hears as a
+    // dropped call. That is what produced "it took almost 30 secs to respond".
+    const res = await post("/tools/does_not_exist", msg("does_not_exist"));
+    expect(res.status).toBe(200);
+    const out = (await json(res)).results[0];
+    expect(out.toolCallId).toBe("tc_does_not_exist");
+    expect(out.error).toContain("do not go quiet");
+  });
+
+  it("still refuses an unsigned request", async () => {
+    const res = await app.request("/tools/does_not_exist", { method: "POST", body: "{}", headers: { "x-vapi-secret": "wrong" } });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("an assistant Server URL pointed at /tools", () => {
+  it("names the misconfiguration instead of returning a bland 404", async () => {
+    // The docs used to say Server URL = /tools. Set that way, every end-of-call report lands here
+    // and the post-call pipeline never runs — silently, because a 404 on an unknown tool path is
+    // indistinguishable from a tool nobody built.
+    const res = await post("/tools/anything", {
+      message: { type: "end-of-call-report", call: { id: "vapi_wrong_url" }, endedReason: "customer-ended-call" },
+    });
+    expect(res.status).toBe(421);
+    const body = await json(res);
+    expect(body).toMatchObject({ error: "wrong_url", message_type: "end-of-call-report", expected_path: "/webhooks/vapi" });
+  });
+
+  it("still treats a genuine tool-calls body on an unknown path as an unbuilt tool", async () => {
+    const res = await post("/tools/does_not_exist", msg("does_not_exist"));
+    expect(res.status).toBe(200);
+    expect((await json(res)).results[0].error).toContain("do not go quiet");
   });
 });

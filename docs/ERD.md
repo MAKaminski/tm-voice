@@ -10,6 +10,7 @@ Source of truth is `packages/db/src/schema.ts`. The diagram is hand-maintained f
 - `schedule_block` is materialized from HCP jobs + PTO + windows; invalidated by webhook and every 15 min.
 - `call_task.gate_result` is written in the same transaction that claims the task (`packages/compliance/src/gate.ts`).
 - `recording.retain_until` = created + 5 years, enforced by check constraint `recording_retain_5y`; the retention sweeper never deletes earlier.
+- `call.disclosure_ok` records whether the fixed opening line was spoken verbatim (rule 10). NULL means not assessed — no transcript, or no script version to compare against. It is persisted rather than only logged because a rule-10 breach otherwise leaves no trace beyond a log retention window.
 
 ## Diagram
 
@@ -132,7 +133,10 @@ call
   apollo_phone_call_id  text
   vapi_call_id  text
   telnyx_call_control_id  text
+  telnyx_hangup_cause  text
+  telnyx_cost_usd  numeric(8, 4)
   cost_usd  numeric(8, 4)  [NOT NULL]
+  disclosure_ok  boolean
   created_at  timestamp with time zone  [NOT NULL]
   updated_at  timestamp with time zone  [NOT NULL]
 recording

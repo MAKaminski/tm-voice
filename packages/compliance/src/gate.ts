@@ -1,7 +1,8 @@
-import { and, count, desc, eq, gte, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { Adapters } from "@tm/adapters";
 import { type AnyDb, call, callTask, campaign, consentEvent, contact, did, suppression } from "@tm/db";
 import type { Config, GateResult, LineType, TargetSurface } from "@tm/shared";
+import { startOfLocalDay } from "@tm/shared";
 import { inCallingWindow } from "./calling-window.js";
 import { type ConsentSnapshot, surfaceAllows } from "./surface.js";
 
@@ -60,6 +61,11 @@ export async function gateAndClaim(db: AnyDb, adapters: Pick<Adapters, "dnc" | "
   return db.transaction(async (tx) => {
     const where = [eq(callTask.status, "queued"), sql`${callTask.earliestDialAt} <= ${now.toISOString()}`];
     if (opts.campaignId) where.push(eq(callTask.campaignId, opts.campaignId));
+    // Only claim work belonging to a running campaign. dial.tick already filters on active
+    // campaigns, but a replayed or hand-enqueued dial.claim does not go through it — so pausing a
+    // campaign did not actually stop it dialling. The pause has to hold here, where the task is
+    // claimed, or it is not a pause.
+    where.push(inArray(callTask.campaignId, tx.select({ id: campaign.id }).from(campaign).where(eq(campaign.status, "active"))));
     const [task] = await tx.select().from(callTask).where(and(...where)).orderBy(callTask.earliestDialAt).limit(1).for("update", { skipLocked: true });
     if (!task) return null;
 
@@ -95,7 +101,8 @@ export async function gateAndClaim(db: AnyDb, adapters: Pick<Adapters, "dnc" | "
       await tx.update(contact).set({ lineType: lineTypeValue, lineTypeCheckedAt: now }).where(eq(contact.id, c.id));
     }
 
-    const dayStart = new Date(now); dayStart.setUTCHours(0, 0, 0, 0);
+    // The DID's day is the business's local day, not UTC's — see startOfLocalDay for why.
+    const dayStart = startOfLocalDay(now, cfg.DIAL_TIMEZONE);
     const [dials] = await tx.select({ n: count() }).from(call).where(and(eq(call.didId, d.id), gte(call.startedAt, dayStart)));
 
     const outcome = runGate({
