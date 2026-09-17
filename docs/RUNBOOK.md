@@ -271,6 +271,17 @@ noise carries that noise into every render. That is a different fix: a new `ELEV
 not a settings change. Check it by generating a sample in the ElevenLabs dashboard with no Vapi in
 the path.
 
+**If every call dies before Joe speaks** with the Vapi end reason
+`pipeline-error-eleven-labs-voice-not-fine-tuned-and-cannot-be-used`, the voice named by
+`ELEVENLABS_VOICE_ID` is a Professional Voice Clone whose fine-tune for the model in `voice.ts` has
+not finished. A PVC is trained **separately for each model**; Flash v2.5, Turbo v2.5 and
+Multilingual v2 all train automatically, so this is an incomplete or failed training job, not an
+unsupported pairing. Check the voice's row in the ElevenLabs dashboard: a spinner means it is still
+training (3–6h typically, up to 24h), and until it clears every dial that reaches TTS fails the same
+way. Do **not** work around it by changing `VOICE_PROFILE.model` — that trades the latency the call
+is priced on (§ 7 above) for a training job that should simply be re-run. `dispositionFor` already
+records these as `failed`, so the calls are counted correctly; they are just all failures.
+
 **If a caller reports long silences**, check in this order: (1) `silenceTimeoutSeconds` in
 `SPEECH_PLAN` — Joe should break a silence before it reads as a dropped call; (2) the worker log for
 `vapi called a tool with no route on this service`, which means the dashboard has a tool the api
