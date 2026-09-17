@@ -3,6 +3,7 @@ import type { Processor } from "./context.js";
 import { availabilityInvalidate, availabilityMaterialize } from "./processors/availability.js";
 import { apolloSyncCampaign, dialRequeue } from "./processors/campaign.js";
 import { dialClaim, dialTick } from "./processors/dial.js";
+import { meetingExtract } from "./processors/extract.js";
 import { meetingPostcall } from "./processors/meeting.js";
 import { postcallProcess } from "./processors/postcall.js";
 import { graphCreateEvent, hcpCreateJob, resendSendPacket } from "./processors/fulfillment.js";
@@ -25,7 +26,7 @@ export const REGISTRY: Record<QueueName, Record<string, AnyProcessor>> = {
   retention: { sweep: p(retentionSweep) },
   vapi: { syncAssistant: p(vapiSyncAssistant) },
   // Discord capture: apps/capture (Fly.io) enqueues, this consumes.
-  meeting: { postcall: p(meetingPostcall as unknown as Processor) },
+  meeting: { postcall: p(meetingPostcall as unknown as Processor), extract: p(meetingExtract as unknown as Processor) },
 };
 
 /** Repeatable schedules registered at boot. */

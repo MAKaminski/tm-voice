@@ -74,10 +74,17 @@ describe("tmos adapter", () => {
     expect(a.tasks?.size).toBe(1);
   });
 
-  it("defaults to Claude / Task Intake / open / source vc", async () => {
+  it("files into the board's real intake status, not the non-existent \"open\"", async () => {
     const a = createTmosAdapter(dryRun);
     await a.createTask({ title: "t", external_key: "vc:s2:1" });
-    expect(a.mock?.calls.at(-1)?.args[0]).toMatchObject({ owner: "Claude", role: "Task Intake", status: "open", source: "vc" });
+    // The live board uses inbox / next / blocked / done / dropped. "open" is not one of them.
+    expect(a.mock?.calls.at(-1)?.args[0]).toMatchObject({ owner: "Claude", role: "Task Intake", status: "inbox", source: "vc" });
+  });
+
+  it("sees a freshly filed task as still open, so it is not filed again next meeting", async () => {
+    const a = createTmosAdapter(dryRun);
+    await a.createTask({ title: "gate code field", external_key: "vc:s9:1" });
+    expect((await a.listOpenTasks()).map((x) => x.title)).toContain("gate code field");
   });
 
   it("addresses the ops schema and merges duplicates", async () => {

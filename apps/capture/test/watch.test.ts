@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mintSessionId, shouldFinalise, shouldStart, trackKey, watchConfig } from "../src/watch.js";
-import { RECORDING_NOTICE, summaryLine } from "../src/notice.js";
+import { RECORDING_NOTICE } from "../src/notice.js";
 
 const human = (id: string) => ({ id, bot: false });
 const bot = (id: string) => ({ id, bot: true });
@@ -65,12 +65,5 @@ describe("what the room is told", () => {
     for (const phrase of ["recorded", "transcribed", "filed as tasks", "Leave the channel"]) {
       expect(RECORDING_NOTICE).toContain(phrase);
     }
-  });
-
-  it("reports back in one line with a count, a duration and the board", () => {
-    expect(summaryLine(3, 3_600, "https://board")).toBe("Recording stopped after 60 min — filed 3 tasks to the board: https://board");
-    expect(summaryLine(1, 90, "https://board")).toContain("filed 1 task to");
-    // A meeting shorter than a minute still reports a minute rather than "0 min".
-    expect(summaryLine(0, 12, "https://board")).toContain("after 1 min");
   });
 });

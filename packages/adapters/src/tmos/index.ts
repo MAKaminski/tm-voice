@@ -15,6 +15,14 @@ import { type Adapter, MockRecorder, request, useMock, validate } from "../base.
 export const TASK_OWNER_CLAUDE = "Claude";
 export const DEFAULT_ROLE = "Task Intake";
 
+/**
+ * The board's status vocabulary, read from the live data on 2026-09-17: inbox, next, blocked, done,
+ * dropped. There is no "open" status, so a card filed as one would land in a state the board's own
+ * columns do not render. New commitments arrive in `inbox`, which is the intake bucket and the
+ * counterpart to the Task Intake role.
+ */
+export const STATUS_NEW = "inbox";
+
 export interface TmosRole { id: string; name: string; owner: string; active: boolean }
 export interface TmosTask { id: string; title: string; status: string; owner: string; source: string | null; external_key: string | null }
 
@@ -22,7 +30,7 @@ export const createTaskInput = z.object({
   title: z.string().min(1),
   owner: z.string().min(1).default(TASK_OWNER_CLAUDE),
   role: z.string().min(1).default(DEFAULT_ROLE),
-  status: z.string().min(1).default("open"),
+  status: z.string().min(1).default(STATUS_NEW),
   source: z.string().min(1).default("vc"),
   /** `vc:<session_id>:<n>` — the unique key a replay collides on. */
   external_key: z.string().min(1),
@@ -38,6 +46,7 @@ export interface TmosAdapter extends Adapter {
   createTask(input: CreateTaskInput): Promise<{ id: string; created: boolean }>;
 }
 
+/** Not yet finished: what the extractor must not file a second time. */
 const STATUSES_OPEN = ["inbox", "next", "blocked"] as const;
 
 export function createTmosAdapter(cfg: Config): TmosAdapter & { mock?: MockRecorder; tasks?: Map<string, TmosTask> } {

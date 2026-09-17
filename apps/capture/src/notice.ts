@@ -10,9 +10,3 @@ export const RECORDING_NOTICE =
   "Recording started. This voice channel is being recorded and transcribed by the Transparent Maintenance " +
   "meeting bot, and commitments made here are filed as tasks on the TM-OS board. Leave the channel to stop " +
   "being recorded. Details are pinned in this channel.";
-
-export function summaryLine(taskCount: number, durationSec: number, boardUrl: string): string {
-  const mins = Math.max(1, Math.round(durationSec / 60));
-  const tasks = taskCount === 1 ? "1 task" : `${taskCount} tasks`;
-  return `Recording stopped after ${mins} min — filed ${tasks} to the board: ${boardUrl}`;
-}

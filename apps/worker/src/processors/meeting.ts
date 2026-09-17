@@ -1,6 +1,6 @@
 import { REQUEST_BYTE_LIMIT, type Segment } from "@tm/adapters";
 import { meeting, speakerTrack, transcript } from "@tm/db";
-import { logger } from "@tm/shared";
+import { idempotencyKey, logger } from "@tm/shared";
 import { eq } from "drizzle-orm";
 import type { Processor } from "../context.js";
 
@@ -93,6 +93,12 @@ export const meetingPostcall: Processor<MeetingPostcallPayload> = async (ctx, p)
   if (tracks.length === 0) {
     // A meeting where nobody spoke is finished, not broken: mark it and stop before extraction.
     await ctx.db.update(meeting).set({ transcriptionState: "transcribed", updatedAt: new Date() }).where(eq(meeting.id, m.id));
+    // Still hand off: extraction is what posts the summary back to the channel, and a meeting that
+    // produced nothing should say so rather than leave the room wondering.
+    await ctx.producer.enqueue("meeting", "extract", {
+      entity_id: m.id, idempotency_key: idempotencyKey("meeting", "extract", p.session_id),
+      attempt: 0, enqueued_at: new Date().toISOString(), session_id: p.session_id,
+    });
     logger.info({ session_id: p.session_id, meeting_id: m.id }, "meeting had no speaker tracks; nothing to transcribe");
     return { meeting_id: m.id, tracks: 0, turns: 0 };
   }
@@ -140,6 +146,17 @@ export const meetingPostcall: Processor<MeetingPostcallPayload> = async (ctx, p)
     await tx.delete(transcript).where(eq(transcript.meetingId, m.id));
     await tx.insert(transcript).values({ meetingId: m.id, turns, summary: null, structured: null });
     await tx.update(meeting).set({ transcriptionState: "transcribed", updatedAt: new Date() }).where(eq(meeting.id, m.id));
+  });
+
+  // Extraction is a separate job, not an inline step: it calls a model and then writes to a system
+  // in another account, and neither should be able to force a re-transcode by failing. The
+  // idempotency key is the session, so a retry of this job cannot queue extraction twice.
+  await ctx.producer.enqueue("meeting", "extract", {
+    entity_id: m.id,
+    idempotency_key: idempotencyKey("meeting", "extract", p.session_id),
+    attempt: 0,
+    enqueued_at: new Date().toISOString(),
+    session_id: p.session_id,
   });
 
   logger.info(
