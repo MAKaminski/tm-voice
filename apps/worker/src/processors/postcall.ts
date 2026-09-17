@@ -38,6 +38,18 @@ const CLOSES_TASK = new Set(["contact_captured", "packet_captured"]);
 const outcomeKey = (o: unknown) => (typeof o === "string" ? o.trim().toLowerCase() : "");
 
 /**
+ * The email address the assistant captured, if the analysis plan produced a usable one. Validated
+ * rather than trusted: a transcriber hearing an address read aloud produces near-misses often
+ * enough that writing one unchecked onto a contact would poison the record.
+ */
+export function capturedEmail(structured: Record<string, unknown> | undefined): string | undefined {
+  const raw = structured?.["contact_email"];
+  if (typeof raw !== "string") return undefined;
+  const v = raw.trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/.test(v) ? v : undefined;
+}
+
+/**
  * Pure. Facts we own (a booking or an opt-out written during the call) beat Vapi's ended reason,
  * which beats the model's own reading of the call.
  */
@@ -69,6 +81,15 @@ export const postcallProcess: Processor<PostcallPayload> = async (ctx, p) => {
     .where(and(eq(suppression.phoneE164, ct.phoneE164), gte(suppression.createdAt, c.startedAt))).limit(1) : [];
   const customerTurns = p.turns.filter((t) => t.role === "customer").length;
   const outcome = outcomeKey(p.structured?.["outcome"]);
+
+  // The assistant sometimes reads an email back correctly but never calls capture_contact, so the
+  // address only exists in the call analysis. Persisting it here means the next call already has
+  // it instead of opening with "I don't have an email address on file" again.
+  const heardEmail = capturedEmail(p.structured);
+  if (heardEmail && ct && !ct.email) {
+    await ctx.db.update(contact).set({ email: heardEmail, updatedAt: new Date() }).where(eq(contact.id, ct.id));
+    logger.info({ contact_id: ct.id, call_id: c.id }, "email captured from call analysis");
+  }
   // The assistant heard an opt-out but no opt_out tool call wrote it: write it now, so the number is never dialed again.
   if (outcome === "opt_out" && !s && ct) {
     await suppress(ctx.db, { phoneE164: ct.phoneE164, reason: "opt-out heard on call (post-call analysis)", channel: "phone", callId: c.id, artifact: { vapi_call_id: p.vapi_call_id } });

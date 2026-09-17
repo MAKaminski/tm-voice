@@ -1,9 +1,9 @@
 import { and, desc, eq } from "drizzle-orm";
 import { type Context, Hono } from "hono";
-import { z } from "zod";
 import { suppress } from "@tm/compliance";
 import { type AnyDb, booking, call, callTask, contact, serviceAddress } from "@tm/db";
-import { logger } from "@tm/shared";
+import { z } from "zod";
+import { logger, sayEmail, sayPhone } from "@tm/shared";
 import type { AppEnv } from "../app.js";
 import { createBooking, enqueuePacket, slotId } from "../booking-core.js";
 import { toolIdempotencyKey } from "../tool-idempotency.js";
@@ -79,6 +79,19 @@ export function describeSlot(startIso: string, endIso: string, tz: string) {
 
 const HORIZON_DAYS = 14;
 const MAX_OPTIONS = 3;
+
+/**
+ * What the agent may hand over for the vendor manager. Everything is optional except that at
+ * least one way of reaching them has to be present, which is checked in the handler so the agent
+ * gets a sayable prompt back rather than a validation error.
+ */
+export const captureContactInput = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  title: z.string().trim().min(1).max(120).optional(),
+  email: z.string().trim().toLowerCase().email().optional(),
+  /** Free-form: a caller reads a number aloud and the transcriber renders it however it likes. */
+  phone: z.string().trim().min(7).max(32).optional(),
+});
 
 /**
  * Agent tool endpoints called by Vapi. All verify the webhook secret and are idempotent on
@@ -182,8 +195,12 @@ export function toolRoutes() {
     const ctx = await resolveCallContext(db, msg);
     if ("error" in ctx) return { sent: false, say: "I can't find your account on file. Someone from our office will follow up." };
     if (!ctx.contact.email) {
-      // Asking for the address on the phone is a Phase 6 conversation; for now, say so plainly.
-      return { sent: false, reason: "no_email", say: "I don't have an email address on file for you, so I'll have our office follow up instead." };
+      // There is now somewhere to put an address, so ask for one instead of giving up.
+      return {
+        sent: false, reason: "no_email",
+        instruction: "Ask for the best email address, then call capture_contact with it.",
+        say: "I don't have an email address on file. What's the best one to send it to?",
+      };
     }
 
     // The packet describes a specific visit, so there has to be one.
@@ -196,7 +213,56 @@ export function toolRoutes() {
 
     await enqueuePacket(producer, b.id);
     logger.info({ booking_id: b.id, contact_id: ctx.contact.id }, "packet requested from call");
-    return { sent: true, to: ctx.contact.email, say: `I've sent the details to ${ctx.contact.email}.` };
+    return { sent: true, to: ctx.contact.email, say: `I've sent the details to ${sayEmail(ctx.contact.email)}` };
+  }));
+
+  /**
+   * Records the vendor manager's contact details — the one outcome this call exists to achieve.
+   *
+   * This route is new, and its absence is why a real call failed twice over: the assistant was
+   * asked to collect an email address and had nowhere to put it, so it announced it would read the
+   * address back and then hung up, and an earlier turn sat silent for half a minute waiting on a
+   * tool call that could never resolve. `send_packet` could only ever read an address already on
+   * file; nothing could write one.
+   *
+   * The email is echoed back spelled out (see `sayEmail`), because handing a raw address to a TTS
+   * voice produces a run of syllables the caller cannot check.
+   */
+  app.post("/capture_contact", toolHandler("capture_contact", async (c, msg, args) => {
+    const { db } = c.get("deps");
+    const ctx = await resolveCallContext(db, msg);
+    if ("error" in ctx) return { captured: false, say: "I can't find your account on file, so let me have someone from the office follow up." };
+
+    const input = captureContactInput.safeParse(args);
+    if (!input.success) {
+      // Never a hard failure: the agent has to have something to say, and asking again is fine.
+      return { captured: false, reason: "invalid_input", say: "Sorry, I didn't catch that. Could you say the email address again?" };
+    }
+    const { name, title, email, phone } = input.data;
+    if (!email && !phone) {
+      return { captured: false, reason: "nothing_to_capture", say: "Could I take an email address or a direct number for them?" };
+    }
+
+    // Written straight onto the contact so the next call already has it, rather than living only
+    // in the call analysis where nothing could read it back.
+    const patch: Partial<typeof contact.$inferInsert> = { updatedAt: new Date() };
+    if (email) patch.email = email;
+    await db.update(contact).set(patch).where(eq(contact.id, ctx.contact.id));
+
+    logger.info(
+      { contact_id: ctx.contact.id, call_id: ctx.callId, has_email: !!email, has_phone: !!phone },
+      "vendor-manager contact captured from call",
+    );
+
+    const parts: string[] = [];
+    if (email) parts.push(`the email as ${sayEmail(email)}`);
+    if (phone) parts.push(`the number as ${sayPhone(phone)}`);
+    return {
+      captured: true,
+      contact: { name, title, email, phone },
+      instruction: "Read the `say` field back exactly as written, letter by letter, without speeding up. Then ask them to confirm it is right. If they correct you, call this tool again with the correction.",
+      say: `Let me make sure I have ${parts.length === 2 ? "these" : "this"} right. I have ${parts.join(", and ")}. Is that correct?`,
+    };
   }));
 
   app.post("/opt_out", toolHandler("opt_out", async (c, msg, args) => {
@@ -209,6 +275,29 @@ export function toolRoutes() {
     });
     return "Opt-out recorded. Apologize briefly, confirm they will not be called again, and end the call now.";
   }));
+
+  /**
+   * Any tool the assistant calls that this service does not implement.
+   *
+   * Without this, an unknown tool name falls through to the app's 404 and Vapi waits out its own
+   * tool timeout — twenty to thirty seconds of silence that a caller reads as a dropped call, then
+   * a hang-up. A dashboard tool added without a matching route here is a configuration mistake, and
+   * it should sound like a brief hiccup rather than a dead line, so it answers immediately with
+   * something the agent can say.
+   */
+  app.all("/*", async (c) => {
+    const raw = c.get("rawBody" as never) as string;
+    const parsed = toolCallMessage.safeParse(JSON.parse(raw || "{}"));
+    const path = new URL(c.req.url).pathname;
+    logger.error({ path }, "vapi called a tool with no route on this service");
+    if (!parsed.success) return c.json({ error: "unknown_tool", path }, 404);
+    return c.json({
+      results: parsed.data.message.toolCalls.map((tc) => ({
+        toolCallId: tc.id,
+        error: "That isn't something you can look up. Carry on with the conversation without it, and do not go quiet.",
+      })),
+    });
+  });
 
   return app;
 }

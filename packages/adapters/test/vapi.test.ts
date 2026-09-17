@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { VOICE_PROFILE, createVapiAdapter, vapiVoiceBlock } from "../src/index.js";
+import { VOICE_PROFILE, createVapiAdapter, vapiVoiceBlock , SPEECH_PLAN} from "../src/index.js";
 import { realConfig, stubFetch } from "./helpers.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -79,36 +79,68 @@ describe("vapi real adapter", () => {
 });
 
 const DISCLOSURE = "Hi, this is an automated assistant using an artificial voice.";
-const desired = { firstMessage: DISCLOSURE, voice: vapiVoiceBlock("voice_joe") };
+const desired = {
+  firstMessage: DISCLOSURE,
+  voice: vapiVoiceBlock("voice_joe"),
+  systemPrompt: "You are Joe.",
+  backgroundSound: "off" as const,
+  speech: SPEECH_PLAN,
+};
 
 describe("vapi assistant sync", () => {
-  it("PATCHes only the opening line and the voice block", async () => {
-    const calls = stubFetch(() => ({ json: { id: "asst_1" } }));
+  /** What a live assistant looks like, including the dashboard-owned bits a sync must preserve. */
+  const liveBody = {
+    id: "asst_1",
+    model: { provider: "openai", model: "gpt-4o", toolIds: ["tool_book"], messages: [{ role: "system", content: "old" }] },
+  };
+
+  it("PATCHes the owned surface", async () => {
+    const calls = stubFetch(() => ({ json: liveBody }));
     await expect(createVapiAdapter(realConfig()).updateAssistant("asst_1", desired))
       .resolves.toEqual({ id: "asst_1", synthetic: false });
-    expect(calls[0]!.method).toBe("PATCH");
-    expect(calls[0]!.url).toBe("https://api.vapi.ai/assistant/asst_1");
-    expect(JSON.parse(calls[0]!.body!)).toEqual({
+    // Reads the assistant first: the model object has to be merged, never rebuilt.
+    expect(calls.map((x) => x.method)).toEqual(["GET", "PATCH"]);
+    expect(calls[1]!.url).toBe("https://api.vapi.ai/assistant/asst_1");
+    const body = JSON.parse(calls[1]!.body!);
+    expect(body).toMatchObject({
       firstMessage: DISCLOSURE,
       voice: { provider: "11labs", voiceId: "voice_joe", ...VOICE_PROFILE },
+      backgroundSound: "off",
+      silenceTimeoutSeconds: 7,
+      startSpeakingPlan: { waitSeconds: 0.8 },
+      stopSpeakingPlan: { numWords: 2, backoffSeconds: 1.5 },
     });
+    expect(body.model.messages[0]).toEqual({ role: "system", content: "You are Joe." });
   });
 
-  it("sends no model, tools or transcriber, so dashboard config survives a sync", async () => {
-    const calls = stubFetch(() => ({ json: { id: "asst_1" } }));
-    await createVapiAdapter(realConfig()).updateAssistant("asst_1", desired);
-    expect(Object.keys(JSON.parse(calls[0]!.body!))).toEqual(["firstMessage", "voice"]);
+  it("skips the read when the caller already has the live assistant", async () => {
+    const calls = stubFetch(() => ({ json: liveBody }));
+    await createVapiAdapter(realConfig()).updateAssistant("asst_1", desired, liveBody);
+    expect(calls.map((x) => x.method)).toEqual(["PATCH"]);
+  });
+
+  it("keeps the dashboard's model choice and tool wiring through a sync", async () => {
+    const calls = stubFetch(() => ({ json: liveBody }));
+    await createVapiAdapter(realConfig()).updateAssistant("asst_1", desired, liveBody);
+    const body = JSON.parse(calls[0]!.body!);
+    // Which LLM it runs and which tools it can call stay dashboard decisions.
+    expect(body.model).toMatchObject({ provider: "openai", model: "gpt-4o", toolIds: ["tool_book"] });
+    // And the transcriber is never sent at all.
+    expect(Object.keys(body).sort()).toEqual([
+      "backgroundSound", "firstMessage", "maxDurationSeconds", "model",
+      "silenceTimeoutSeconds", "startSpeakingPlan", "stopSpeakingPlan", "voice",
+    ]);
   });
 
   it("refuses an out-of-range profile before it reaches the network", async () => {
     const calls = stubFetch(() => ({ json: {} }));
-    const bad = { firstMessage: DISCLOSURE, voice: { ...desired.voice, speed: 2 } };
+    const bad = { ...desired, voice: { ...desired.voice, speed: 2 } };
     await expect(createVapiAdapter(realConfig()).updateAssistant("asst_1", bad))
       .rejects.toMatchObject({ code: "invalid_input", retryable: false });
     expect(calls).toHaveLength(0);
   });
 
-  it("reads back the two owned fields", async () => {
+  it("reads back the owned fields", async () => {
     const calls = stubFetch(() => ({ json: { id: "asst_1", firstMessage: DISCLOSURE, voice: { provider: "11labs", stability: 0.9 } } }));
     await expect(createVapiAdapter(realConfig()).getAssistant("asst_1")).resolves.toEqual({
       id: "asst_1", firstMessage: DISCLOSURE, voice: { provider: "11labs", stability: 0.9 },
@@ -122,6 +154,11 @@ describe("vapi assistant sync", () => {
     expect(v.mode).toBe("mock");
     await expect(v.updateAssistant("asst_1", desired)).resolves.toEqual({ id: "asst_1", synthetic: true });
     expect(calls).toHaveLength(0);
-    expect(v.mock!.calls.at(-1)).toMatchObject({ method: "updateAssistant", args: ["asst_1", desired] });
+    const rec = v.mock!.calls.at(-1)!;
+    expect(rec.method).toBe("updateAssistant");
+    expect(rec.args[0]).toBe("asst_1");
+    expect(rec.args[1]).toEqual(desired);
+    // The merged model is recorded too, so a dry run shows what the PATCH would have carried.
+    expect(rec.args[2]).toMatchObject({ model: { messages: [{ role: "system", content: "You are Joe." }] } });
   });
 });

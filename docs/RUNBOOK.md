@@ -120,6 +120,41 @@ Procedure and per-vendor rotation URLs: **`docs/CREDENTIALS.md` § Rotation**. A
 
 Blended assumption $0.095/min → $0.063/dial at 5,000 dials/mo; $1/call line at ~2,000 dials/mo. `call.cost_usd` is populated in Phase 5 from vendor usage so this table can be replaced with measurements.
 
+## 7b. Changing how Joe behaves on a call
+
+The opening line, the voice, the system prompt and the call-handling settings all live in this repo
+and are pushed to Vapi by the `vapi.syncAssistant` job (`docs/ARCHITECTURE.md` § 9.1). Editing them
+in the Vapi dashboard does not work: the sync reverts the edit within a day and logs the revert.
+
+| To change | Edit | Takes effect |
+|---|---|---|
+| What Joe says first | a **new** `script_version` row, then mark it active | next sync |
+| How Joe sounds | `packages/adapters/src/vapi/voice.ts` | next sync |
+| How Joe behaves — turn-taking, email read-back, what he is trying to achieve | `packages/adapters/src/vapi/conversation.ts` | next sync |
+| Ambient noise, interruption handling, silence and call-length limits | `SPEECH_PLAN` in `conversation.ts` | next sync |
+| Which LLM, which transcriber, which tools exist | Vapi dashboard — not owned here | immediately |
+
+**The sync only writes for real outside `dry_run`.** In `DIAL_MODE=dry_run` the vapi adapter is a
+mock, so `updateAssistant` records the PATCH it *would* have sent and the live assistant is not
+touched. A behaviour fix merged while the system is in `dry_run` reaches a real call only once the
+mode is `verified_only` or `live`.
+
+The job runs every 24h and on worker boot, so a deploy is usually enough. To force it, restart the
+worker. To see what it would do without waiting, the drift list is in the worker log line
+`vapi assistant reconciled to the checked-in profile`.
+
+**If a caller still reports background noise** after a sync has run with `backgroundSound: "off"`,
+the remaining suspect is the ElevenLabs voice itself — a voice cloned from a recording with room
+noise carries that noise into every render. That is a different fix: a new `ELEVENLABS_VOICE_ID`,
+not a settings change. Check it by generating a sample in the ElevenLabs dashboard with no Vapi in
+the path.
+
+**If a caller reports long silences**, check in this order: (1) `silenceTimeoutSeconds` in
+`SPEECH_PLAN` — Joe should break a silence before it reads as a dropped call; (2) the worker log for
+`vapi called a tool with no route on this service`, which means the dashboard has a tool the api
+does not implement and the catch-all is covering for it; (3) the model configured in the dashboard,
+which the repo does not own.
+
 ## 8. Operations
 
 - Dead letters: worker moves a job to queue `dead` after 5 failed attempts. `pnpm replay <queue> <job_id>` re-enqueues it.

@@ -246,7 +246,7 @@ flowchart TB
   c1["console<br/>GET /campaigns · GET /bookings · POST /bookings/:id/review · GET /availability"]:::ok
   c2["anyone<br/>GET /health"]:::pub
   c3["prospect<br/>GET+POST /book/:token"]:::pub
-  v1["Vapi tool calls<br/>POST /tools/get_availability · book_job · send_packet · opt_out"]:::ok
+  v1["Vapi tool calls<br/>POST /tools/get_availability · book_job · send_packet · opt_out · capture_contact<br/>plus a catch-all: an unrouted tool answers at once instead of timing out"]:::ok
   v2["Vapi end-of-call-report<br/>POST /webhooks/vapi"]:::gap
   t1["Telnyx call events<br/>POST /webhooks/telnyx"]:::gap
   h1["Housecall Pro job.* webhooks<br/>POST /webhooks/hcp"]:::gap
@@ -387,15 +387,35 @@ Before adding a component, extend one of these. Two components solving the same 
 | One booking write path | `createBooking()` in `apps/api/src/booking-core.ts`, idempotent on (contact, window_start) | `/book/:token` and `book_job` |
 | Stateless slot handle | `slot_id` = short hash of (technician, window_start); recomputed on `book_job` | `get_availability` → `book_job` |
 | Idempotent write | unique `idempotency_key` column + `onConflictDoNothing` | `booking`, `email_send` |
+| Say it out loud | data a TTS voice has to read is rendered for the ear, not the eye: spelled out, punctuation named, digits as words | `sayEmail` / `sayPhone` in `packages/shared/src/speech.ts` |
 | Checked-in vendor state | desired state is a reviewed constant in this repo; a scheduled job reads the live object, diffs the fields it owns, and PATCHes only on drift | `vapi.syncAssistant` |
 
 Worker schedules registered at boot: `dial.tick` 60s · `dial.requeue` 30m · `availability.materialize` 15m · `apollo.syncCampaign` 60m · `retention.sweep` 24h · `vapi.syncAssistant` 24h. Concurrency is 1 on `dial`, 4 everywhere else.
 
-### 9.1 The assistant's voice
+### 9.1 The assistant's voice, script and call handling
 
 Joe is an ElevenLabs voice rendered by Vapi. His tuning used to exist only in the Vapi dashboard, which meant a change to how the agent sounds to a prospect produced no diff and no review. It now lives in `packages/adapters/src/vapi/voice.ts`, and `vapi.syncAssistant` reconciles assistant `VAPI_ASSISTANT_ID` against it once a day.
 
-The job owns exactly two fields: `firstMessage`, which it sets to the active `SCRIPT_VERSION.disclosure_line` verbatim (rule 10, now enforced by a running job rather than by convention), and the `voice` block below. Everything else on the assistant — model, tools, transcriber — is dashboard territory and is never written. `voiceId` is not in this file: which voice Joe *is* stays in `ELEVENLABS_VOICE_ID`, so swapping voices is a config change, while how he *sounds* is a code review.
+**The owned surface grew on 2026-09-17,** after seven pieces of feedback from a real call. Six of the seven traced to the system prompt or to a Vapi call-handling setting — the agent talking over the caller, re-pitching three turns in a row, reading an email address back unintelligibly, sitting silent for half a minute, hanging up mid-sentence, and an ambient office-noise loop nobody had chosen. All of that lived on exactly the surface the split called "dashboard territory", which is to say the surface with no diff, no review and no CI. An agent that hangs up on a prospect is not a dashboard preference.
+
+So the job now owns four things:
+
+| Field | Source of truth | Why it is owned |
+|---|---|---|
+| `firstMessage` | active `SCRIPT_VERSION.disclosure_line`, verbatim | Rule 10, enforced by a running job rather than by convention |
+| `voice` | `packages/adapters/src/vapi/voice.ts` | How Joe sounds is a code review |
+| `model.messages[0]` (the system prompt) | `packages/adapters/src/vapi/conversation.ts` | How Joe behaves is a code review, for the same reason |
+| `backgroundSound` + the speech plan | `conversation.ts` | Turn-taking and ambience decide whether a call is usable at all |
+
+It still stops short of the model choice, the transcriber and the tool wiring. `updateAssistant` **reads** the live assistant and replaces only `model.messages`, because Vapi replaces a nested object wholesale on PATCH and sending a freshly built `model` would silently drop the assistant's tools. Which LLM it runs and which tools it can call stay dashboard decisions.
+
+`voiceId` is not in this file: which voice Joe *is* stays in `ELEVENLABS_VOICE_ID`, so swapping voices is a config change, while how he *sounds* is a code review.
+
+**Every rule in `conversation.ts` traces to a specific failed call**, which is why it reads as rules rather than suggestions — each one fixes the model doing something reasonable-sounding that made the call worse. The objective is deliberately narrow: find out who approves maintenance vendors and how to reach them. A scripted agent cannot hold an open-ended conversation about maintenance contracts, and trying is what produced the re-pitching.
+
+### 9.2 Saying data out loud
+
+`sayEmail` / `sayPhone` / `spellOut` in `packages/shared/src/speech.ts` exist because handing a raw email address to a TTS engine produces a fast run of syllables in which the parts a listener needs — where the dots are, hyphen versus underscore — are exactly the parts that get swallowed. Addresses are therefore said once whole and then spelled, punctuation named in words, digits as words so "0" cannot be written down as "O", commas between every character so the voice pauses instead of sprinting. `capture_contact` and `send_packet` both read back through it.
 
 `pnpm voice:check` fails CI when this block drifts from the profile or when the profile is a shape ElevenLabs would not honour. `pnpm voice:write` regenerates it.
 
