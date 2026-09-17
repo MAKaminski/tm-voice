@@ -38,8 +38,12 @@ flowchart LR
     redis[("Redis<br/>BullMQ queues + DLQ 'dead'<br/>slot cache, 15 min TTL")]:::store
   end
 
+  subgraph fly["Fly.io · production"]
+    capture["capture<br/>discord.js gateway + @discordjs/voice<br/>Opus over UDP · here because Railway has none"]:::svc
+  end
+
   subgraph supabase["Supabase TM1"]
-    pg[("Postgres<br/>schema agents · 17 tables<br/>RLS enabled, zero policies")]:::store
+    pg[("Postgres<br/>schema agents · 19 tables<br/>RLS enabled, zero policies")]:::store
   end
 
   reviewer -->|"HTTPS"| console
@@ -52,7 +56,14 @@ flowchart LR
   redis -->|"consume<br/>5 attempts · exp backoff 30s→16m"| worker
   worker -->|"enqueue follow-on jobs"| redis
   api -.->|"read/write slot cache"| redis
+  capture -->|"enqueue meeting.postcall · REDIS_URL<br/>jobId = idempotency_key, same envelope"| redis
+  capture <-->|"postgres-js · DATABASE_URL<br/>meeting · speaker_track · recording · consent_event"| pg
 ```
+
+The fourth service is the odd one out and the reason is physical, not a preference: Discord voice
+media is Opus over UDP with no TCP fallback, and Railway does not carry it. Capture therefore runs
+on Fly.io while everything downstream of the recording — the queue, the worker, the database —
+stays on Railway. It shares this repo, this job envelope and these adapters; only the host differs.
 
 **What has to be true for this to run:**
 
@@ -99,6 +110,14 @@ flowchart LR
     r2["Cloudflare R2<br/>keys in hand · bucket undecided"]:::partial
   end
 
+  subgraph capturepath["Discord capture — off the dial path entirely"]
+    capture["capture (Fly.io)"]:::svc
+    discord["Discord<br/>Guilds + GuildVoiceStates only<br/>no bot token yet"]:::partial
+    sttb["Batch STT<br/>OPEN VENDOR DECISION<br/>mock in every mode"]:::gap
+    llm["Anthropic Messages<br/>LLM_* keys exist, client new"]:::partial
+    tmos["TM-OS ops.tasks<br/>PostgREST · other Supabase project"]:::partial
+  end
+
   worker -->|"GET /number_lookup · Bearer TELNYX_API_KEY<br/>line_type cached 90d on contact"| telnyx
   worker -->|"GET check · DNC_API_KEY<br/>federal only · cached 30d"| dnc
   worker -->|"POST /call · Bearer VAPI_PRIVATE_KEY<br/>assistantId · phoneNumberId · name = call_task_id"| vapi
@@ -114,8 +133,28 @@ flowchart LR
   worker -->|"POST /users/{mailbox}/events<br/>private_key_jwt PS256 · transactionId"| msgraph
   worker -->|"POST /emails · Bearer RESEND_API_KEY<br/>Idempotency-Key"| resend
   worker -->|"POST /contacts/search · master APOLLO_API_KEY<br/>hourly · creates call_task rows"| apollo
-  worker -.->|"PutObject · presign · DeleteObject · SigV4<br/>mock until 4 R2 keys are set"| r2
+  worker -.->|"PutObject · GetObject · presign · DeleteObject · SigV4<br/>mock until 4 R2 keys are set"| r2
+
+  capture -->|"gateway WSS + voice Opus/UDP<br/>Bot DISCORD_BOT_TOKEN · WATCH_CHANNEL_IDS"| discord
+  capture -.->|"PutObject · one object per speaker track"| r2
+  worker -.->|"GetObject · the track to transcribe"| r2
+  worker -.->|"transcribeFile(bytes) — no provider chosen"| sttb
+  worker -.->|"POST /v1/messages · temperature 0<br/>commitments only, verbatim quotes"| llm
+  worker -.->|"POST /rest/v1/tasks · Accept-Profile: ops<br/>on_conflict=external_key"| tmos
+  worker -->|"POST /channels/{id}/messages<br/>one line: task count, duration, board"| discord
 ```
+
+**The second inbound edge.** The diagram above has two paths that start outside this system and end
+at a task table, drawn deliberately in parallel:
+
+```
+Vapi end-of-call-report ──▶ api /webhooks/vapi ──▶ postcall.process ──▶ call_task.next step
+Discord voice (Fly.io)  ──▶ R2 ──▶ Railway worker ──▶ stt-batch ──▶ Claude ──▶ ops.tasks
+```
+
+Neither knows about the other. They share the job envelope, the adapter interface, the retry policy
+and the dead-letter queue, and nothing else. The capture edge is the newer one and the only one
+whose first hop is not HTTP.
 
 **Per-vendor detail** — the wire format each real client speaks, the keys that flip it real, and the one constraint that will bite if forgotten:
 
@@ -128,6 +167,10 @@ flowchart LR
 | **resend** | `RESEND_API_KEY` `MAIL_FROM` | `POST /emails` | `Idempotency-Key` header, 24h, ≤256 chars | One `email_send` row per (booking, template); a re-run finds `status=sent` and stops before the vendor. |
 | **apollo** | `APOLLO_API_KEY` | `POST /contacts/search` · `POST /phone_calls` · `PATCH /accounts/{id}` | Job envelope only — Apollo offers no idempotency header | All three endpoints need a **master** key. `/phone_calls` takes its params as a **query string**, not a body. Saved searches are addressed as `contact_label_ids` and must be contact-modality lists. |
 | **r2** | `R2_ACCOUNT_ID` `R2_ACCESS_KEY_ID` `R2_SECRET_ACCESS_KEY` `R2_BUCKET` | S3 `PutObject` / presigned `GetObject` / `DeleteObject` | Object key | The only client not using `request()`: SigV4 needs `@aws-sdk/client-s3`, pinned to the fetch handler. Presigned URLs cap at 7 days. Recordings need their **own bucket** — see `docs/CREDENTIALS.md` § storage. |
+| **discord** | `DISCORD_BOT_TOKEN` | `GET /users/@me` · `GET /channels/{id}` · `POST /channels/{id}/messages` | none needed — the only writes are two notices per meeting | Intents are **Guilds + GuildVoiceStates**, neither privileged. `MESSAGE_CONTENT` and Read Message History are deliberately absent: the bot posts into a channel it is already recording and never reads. The adapter refuses to post outside `WATCH_CHANNEL_IDS`, and posts with `allowed_mentions.parse: []` so a notice never pings a room. Gateway and voice are **not** here — they need a long-lived socket and a UDP path, and live in `apps/capture`. |
+| **stt_batch** | never — see the constraint column | nothing; there is no real client | n/a | **Mock in every mode, including `live`.** The vendor is an open decision: tm-voice's STT is Soniox streaming bundled inside Vapi and cannot transcribe a file, so nothing existing is reusable, and adopting Deepgram here would contaminate the Phase 6.5 trigger audit. Setting `STT_BATCH_PROVIDER`/`STT_BATCH_API_KEY` does **not** make transcription real and `/health` says so. The interface — bytes plus a media type in, timed segments out — is the shape every candidate drops into. |
+| **llm** | `LLM_API_KEY` | `POST /v1/messages`, `anthropic-version: 2023-06-01` | none; the job envelope's key, plus `temperature: 0` so a replay extracts the same tasks | The first LLM client in this repo — the `LLM_*` keys existed but nothing read them, because the dial path's model lives inside Vapi's own Provider Keys. Refuses to construct when `LLM_PROVIDER` is set to anything but `anthropic`: `infra/env.example` allows `openai` as a value but only the Anthropic wire format is written, and failing at boot beats discovering it on the first meeting of the day. 120s timeout — a long transcript exceeds the 15s default before the first byte. |
+| **tmos** | `TMOS_SUPABASE_URL` `TMOS_SERVICE_KEY` | PostgREST: `GET /rest/v1/roles` · `GET/POST /rest/v1/tasks` with `Accept-Profile`/`Content-Profile: ops` | `on_conflict=external_key` + `Prefer: resolution=merge-duplicates`, so a replayed job cannot file twice even racing another worker | `ops.tasks` is in a **different Supabase project** from tm-voice's Postgres, so it is reached as a vendor — never through drizzle, never added to `packages/db`. Two databases in one drizzle schema would put the CRM inside the migration blast radius. Idempotency is `external_key`, **not** `source`: `source` is an existing low-cardinality label (`manual`, `process`, `claude`, `discord`) shared by dozens of rows and cannot carry a unique constraint. The status vocabulary is `inbox`/`next`/`blocked`/`done`/`dropped` — there is no `open`. |
 | **hcp** | `HCP_API_KEY` | `GET /employees` · `GET /jobs?scheduled_start_min&scheduled_start_max` · `GET /company/schedule_availability` · `POST /jobs`, all paged at 200 | `tm-voice:<booking id>` **tag** on the job; before creating, the client scans ±1 day around `scheduled_start` for a job already carrying it | Every read shape was taken from the live API, not docs — envelope `{page, page_size, total_pages, total_items, <collection>}`, `schedule.{scheduled_start, scheduled_end, arrival_window}`, `assigned_employees[].id`, `address.{latitude, longitude}`. Canceled (`work_status` *pro canceled*, `canceled_at`) and deleted jobs are dropped so they never block a technician. `POST /jobs` mirrors those field names and **cannot be verified without creating a job in the production field system**; a wrong field fails as a vendor 4xx, never silently. Every job needs a `customer_id` — no `account.hcp_customer_id`, no job. Webhook verification has no signing secret yet, so `/webhooks/hcp` fails closed (401) and the 15-minute materializer carries freshness. |
 
 ---
@@ -367,6 +410,7 @@ Every row in this table is now a *missing thing* rather than a regression: the H
 | Availability & booking | api availability service, booking routes, console `/book`, hcp adapter | `technician`, `schedule_block`, `service_address`, `booking` |
 | Fulfillment | worker `hcp.createJob` / `graph.createEvent` / `resend.sendPacket`, reviewer | `calendar_invite`, `email_send` |
 | Post-call (Phase 5) | worker `postcall.process` (stub), r2 adapter, `retention.sweep` | `recording` (`retain_until` ≥ 5y, DB check constraint), `transcript` |
+| Discord capture | `apps/capture` (Fly.io), worker `meeting.postcall` / `meeting.extract`, discord + stt-batch + llm + tmos adapters | `meeting`, `speaker_track`, and the meeting-parented rows in `recording`, `transcript` and `consent_event` |
 | CRM sync | apollo adapter, `apollo.syncCampaign` | `account`, `contact` |
 
 ---
@@ -387,6 +431,8 @@ Before adding a component, extend one of these. Two components solving the same 
 | One booking write path | `createBooking()` in `apps/api/src/booking-core.ts`, idempotent on (contact, window_start) | `/book/:token` and `book_job` |
 | Stateless slot handle | `slot_id` = short hash of (technician, window_start); recomputed on `book_job` | `get_availability` → `book_job` |
 | Idempotent write | unique `idempotency_key` column + `onConflictDoNothing` | `booking`, `email_send` |
+| Two-level idempotency | a parent row's state guards the job, a child row's state guards each unit of work inside it, so a crash resumes rather than repeating | `meeting.transcription_state` + `speaker_track.transcription_state` |
+| Verify before filing | model output is filed only when a verbatim quote from it is found in the source text; an invented quote is what a hallucinated item looks like | `meeting.extract` |
 | Checked-in vendor state | desired state is a reviewed constant in this repo; a scheduled job reads the live object, diffs the fields it owns, and PATCHes only on drift | `vapi.syncAssistant` |
 
 Worker schedules registered at boot: `dial.tick` 60s · `dial.requeue` 30m · `availability.materialize` 15m · `apollo.syncCampaign` 60m · `retention.sweep` 24h · `vapi.syncAssistant` 24h. Concurrency is 1 on `dial`, 4 everywhere else.
