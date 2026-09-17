@@ -1,0 +1,403 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "TM Voice — autonomous outbound voice agent",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1360,
+      580
+    ],
+    "repository": {
+      "url": "https://github.com/MAKaminski/tm-voice",
+      "provider": "github",
+      "revision": "985b74edc8f43c4974832e6bca489e210ea1be1d"
+    },
+    "views": [
+      {
+        "id": "dial-path",
+        "label": "The outbound dial path",
+        "focus": [
+          "console",
+          "api",
+          "redis",
+          "worker",
+          "gate",
+          "vapi",
+          "telnyx",
+          "prospect"
+        ],
+        "note": "A campaign tick claims a task, the gate runs in the same transaction, and only gate_result = pass reaches a vendor."
+      },
+      {
+        "id": "post-call",
+        "label": "What happens after the call",
+        "focus": [
+          "vapi",
+          "api",
+          "worker",
+          "postgres",
+          "r2",
+          "apollo"
+        ],
+        "note": "The end-of-call report lands on /webhooks/vapi and fans out into a disposition, a stored recording and a CRM activity."
+      },
+      {
+        "id": "capture",
+        "label": "Discord meeting capture",
+        "focus": [
+          "capture",
+          "redis",
+          "worker",
+          "postgres"
+        ],
+        "note": "A second inbound edge, on Fly.io because Railway has no inbound UDP, terminating in the same tables."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "console",
+      "type": "frontend",
+      "label": "Console",
+      "sublabel": "Next.js · /review",
+      "tag": "no auth yet",
+      "pos": [
+        50,
+        40
+      ],
+      "size": [
+        155,
+        66
+      ],
+      "sources": [
+        {
+          "path": "apps/console/app/review/ReviewQueue.tsx",
+          "label": "reviewer queue"
+        }
+      ]
+    },
+    {
+      "id": "prospect",
+      "type": "external",
+      "label": "Prospect",
+      "sublabel": "vendor manager",
+      "pos": [
+        1125,
+        40
+      ],
+      "size": [
+        155,
+        66
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "API",
+      "sublabel": "Hono",
+      "pos": [
+        50,
+        180
+      ],
+      "size": [
+        155,
+        66
+      ],
+      "sources": [
+        {
+          "path": "apps/api/src/routes/tools.ts",
+          "label": "tool calls"
+        },
+        {
+          "path": "apps/api/src/routes/webhooks.ts",
+          "label": "webhooks"
+        }
+      ]
+    },
+    {
+      "id": "redis",
+      "type": "messagebus",
+      "label": "Redis",
+      "sublabel": "BullMQ + DLQ",
+      "pos": [
+        265,
+        180
+      ],
+      "size": [
+        155,
+        66
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Worker",
+      "sublabel": "processors",
+      "pos": [
+        480,
+        180
+      ],
+      "size": [
+        155,
+        66
+      ],
+      "sources": [
+        {
+          "path": "apps/worker/src/registry.ts",
+          "label": "job registry"
+        }
+      ]
+    },
+    {
+      "id": "gate",
+      "type": "security",
+      "label": "Pre-dial gate",
+      "sublabel": "in the claim transaction",
+      "pos": [
+        695,
+        180
+      ],
+      "size": [
+        155,
+        66
+      ],
+      "sources": [
+        {
+          "path": "packages/compliance/src/gate.ts",
+          "label": "gateAndClaim"
+        }
+      ]
+    },
+    {
+      "id": "vapi",
+      "type": "external",
+      "label": "Vapi",
+      "sublabel": "voice agent",
+      "pos": [
+        910,
+        180
+      ],
+      "size": [
+        155,
+        66
+      ]
+    },
+    {
+      "id": "telnyx",
+      "type": "external",
+      "label": "Telnyx",
+      "sublabel": "BYO DID",
+      "pos": [
+        1125,
+        180
+      ],
+      "size": [
+        155,
+        66
+      ]
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "Postgres",
+      "sublabel": "Drizzle · agents",
+      "tag": "19 tables",
+      "pos": [
+        480,
+        330
+      ],
+      "size": [
+        155,
+        66
+      ],
+      "sources": [
+        {
+          "path": "packages/db/src/schema.ts",
+          "label": "schema"
+        }
+      ]
+    },
+    {
+      "id": "r2",
+      "type": "cloud",
+      "label": "Cloudflare R2",
+      "sublabel": "audio · 5 years",
+      "pos": [
+        695,
+        330
+      ],
+      "size": [
+        155,
+        66
+      ]
+    },
+    {
+      "id": "apollo",
+      "type": "external",
+      "label": "Apollo",
+      "sublabel": "CRM",
+      "pos": [
+        910,
+        330
+      ],
+      "size": [
+        155,
+        66
+      ]
+    },
+    {
+      "id": "capture",
+      "type": "backend",
+      "label": "Capture",
+      "sublabel": "Fly.io · Discord",
+      "tag": "no UDP on Railway",
+      "pos": [
+        50,
+        460
+      ],
+      "size": [
+        155,
+        66
+      ],
+      "sources": [
+        {
+          "path": "apps/capture/src/finalise.ts",
+          "label": "session finalise"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Railway",
+      "wraps": [
+        "api",
+        "redis",
+        "worker",
+        "gate"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "console-api",
+      "from": "console",
+      "to": "api",
+      "label": "Bearer token",
+      "labelDy": 24
+    },
+    {
+      "id": "api-redis",
+      "from": "api",
+      "to": "redis",
+      "label": "enqueue",
+      "variant": "dashed"
+    },
+    {
+      "id": "redis-worker",
+      "from": "redis",
+      "to": "worker",
+      "label": "BullMQ"
+    },
+    {
+      "id": "worker-gate",
+      "from": "worker",
+      "to": "gate",
+      "label": "claim",
+      "variant": "security"
+    },
+    {
+      "id": "gate-vapi",
+      "from": "gate",
+      "to": "vapi",
+      "label": "on pass",
+      "variant": "emphasis"
+    },
+    {
+      "id": "vapi-telnyx",
+      "from": "vapi",
+      "to": "telnyx"
+    },
+    {
+      "id": "telnyx-prospect",
+      "from": "telnyx",
+      "to": "prospect",
+      "label": "PSTN"
+    },
+    {
+      "id": "vapi-api",
+      "from": "vapi",
+      "to": "api",
+      "label": "tool calls + end-of-call report",
+      "fromSide": "top",
+      "toSide": "top"
+    },
+    {
+      "id": "worker-postgres",
+      "from": "worker",
+      "to": "postgres"
+    },
+    {
+      "id": "worker-r2",
+      "from": "worker",
+      "to": "r2",
+      "label": "recording",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "worker-apollo",
+      "from": "worker",
+      "to": "apollo",
+      "label": "logCall",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "capture-redis",
+      "from": "capture",
+      "to": "redis",
+      "label": "meeting.postcall",
+      "variant": "dashed"
+    },
+    {
+      "id": "capture-postgres",
+      "from": "capture",
+      "to": "postgres",
+      "label": "meeting + tracks"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "The rule everything bends around",
+      "items": [
+        "No code path reaches Telnyx or Vapi without CALL_TASK.gate_result = 'pass' written in the same transaction",
+        "DIAL_MODE (dry_run | verified_only | live) is enforced in the adapters, never in the UI",
+        "SUPPRESSION is unique on phone_e164 and is never keyed on a contact"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Two inbound edges, one destination",
+      "items": [
+        "Vapi posts tool calls during a call and an end-of-call report at the end",
+        "Telnyx posts carrier events — hangup cause and per-leg cost — to /webhooks/telnyx",
+        "Discord capture uploads speaker tracks to R2 and files commitments as TM-OS tasks"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Patterns, not exceptions",
+      "items": [
+        "Vendor SDKs are imported only inside packages/adapters/<vendor>",
+        "Every external write is a BullMQ job with the standard envelope and an idempotency key",
+        "The API and the worker read and write the same Drizzle schema",
+        "Replay any dead job with pnpm replay <queue> <job_id>"
+      ]
+    }
+  ]
+}
