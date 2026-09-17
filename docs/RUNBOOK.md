@@ -250,6 +250,7 @@ in the Vapi dashboard does not work: the sync reverts the edit within a day and 
 | To change | Edit | Takes effect |
 |---|---|---|
 | What Joe says first | a **new** `script_version` row, then mark it active | next sync |
+| What Joe may say about the company | the **Licences** tab in TM-OS — licence numbers, crews, trades, routing contacts. Tick **Voice agent** on a row to let him state it; untick to silence it. Not a code change. | next sync |
 | How Joe sounds | `packages/adapters/src/vapi/voice.ts` | next sync |
 | How Joe behaves — turn-taking, email read-back, what he is trying to achieve | `packages/adapters/src/vapi/conversation.ts` | next sync |
 | Ambient noise, interruption handling, silence and call-length limits | `SPEECH_PLAN` in `conversation.ts` | next sync |

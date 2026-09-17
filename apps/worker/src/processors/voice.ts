@@ -16,8 +16,14 @@ const OWNED_VOICE = ["provider", "voiceId", "model", "stability", "similarityBoo
  *
  * Exactly one script_version is expected to be active. More than one is a seeding bug, and
  * picking an arbitrary row would mean dialling with an unreviewed opening line, so it throws.
+ *
+ * The company facts come from TM-OS, which makes this depend on a system outside the repo. It fails
+ * closed for the same reason the script-version check does: pushing a prompt with the facts silently
+ * stripped would leave a live assistant that answers "I don't know" to every qualifying question,
+ * and it would do so without anything failing visibly. Throwing leaves the last good assistant in
+ * place, which is the safe state — the sync is a reconciler, so it simply tries again next run.
  */
-export async function desiredAssistant(ctx: Ctx): Promise<AssistantDesiredState> {
+export async function desiredAssistant(ctx: Ctx, now = new Date()): Promise<AssistantDesiredState> {
   const voiceId = ctx.cfg.ELEVENLABS_VOICE_ID;
   if (!voiceId) throw new Error("vapi.syncAssistant requires ELEVENLABS_VOICE_ID (which voice Joe is)");
 
@@ -27,10 +33,16 @@ export async function desiredAssistant(ctx: Ctx): Promise<AssistantDesiredState>
     throw new Error(`expected exactly 1 active script_version, found ${active.length}; refusing to guess the opening line`);
   }
   const row = active[0]!;
+
+  const facts = await ctx.adapters.tmos.listCompanyFacts();
+  if (!facts.facts.length && !facts.licences.length) {
+    throw new Error("tmos returned no sayable company facts; refusing to sync an assistant that knows nothing about the company");
+  }
+
   return {
     firstMessage: row.line,
     voice: vapiVoiceBlock(voiceId, VOICE_PROFILE),
-    systemPrompt: buildSystemPrompt({ disclosureLine: row.line, scriptBody: row.body }),
+    systemPrompt: buildSystemPrompt({ disclosureLine: row.line, scriptBody: row.body, facts, now }),
     backgroundSound: BACKGROUND_SOUND,
     speech: SPEECH_PLAN,
     recordingEnabled: RECORDING_ENABLED,

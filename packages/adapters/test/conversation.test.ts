@@ -1,10 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
-  BACKGROUND_SOUND, CONVERSATION_RULES, OBJECTIVE, SPEECH_PLAN, buildSystemPrompt,
-  mergeSystemPrompt, speechFields, speechPlanSchema, systemPromptOf,
+  BACKGROUND_SOUND, CONVERSATION_RULES, type Facts, OBJECTIVE, SPEECH_PLAN, buildSystemPrompt,
+  mergeSystemPrompt, renderFacts, speechFields, speechPlanSchema, systemPromptOf,
 } from "../src/index.js";
 
-const prompt = buildSystemPrompt({ disclosureLine: "Hi, this is an automated assistant.", scriptBody: "Ask about vendors." });
+/** Two licences either side of a date, so one clock can prove the filter both ways. */
+const FACTS: Facts = {
+  licences: [
+    { kind: "general_contractor", name: "Georgia general contractor — company", number: "RBCO007813", holder: "Transparent Maintenance", expires_on: "2030-06-30" },
+    { kind: "lead_safe_firm", name: "Georgia certified lead-based paint renovation firm", number: "GA-EPD-RRP FIRM-398659", holder: "Transparent Maintenance Inc.", expires_on: "2026-12-14" },
+    { kind: "registration", name: "Georgia Secretary of State control number", number: "22027249", holder: "Transparent Maintenance", expires_on: null },
+  ],
+  facts: [
+    { key: "capacity", label: "Crews", value: "Maintenance: 2 technicians." },
+    { key: "work_orders", label: "Work orders", value: "wo@transparentmaintenance.com" },
+  ],
+};
+const NOW = new Date("2026-09-17T12:00:00Z");
+const prompt = buildSystemPrompt({ disclosureLine: "Hi, this is an automated assistant.", scriptBody: "Ask about vendors.", facts: FACTS, now: NOW });
 
 describe("the call-handling settings", () => {
   it("has ambient office noise off", () => {
@@ -101,7 +114,61 @@ describe("the assembled prompt", () => {
   });
 
   it("refuses to build without a disclosure line", () => {
-    expect(() => buildSystemPrompt({ disclosureLine: "", scriptBody: "x" })).toThrow();
+    expect(() => buildSystemPrompt({ disclosureLine: "", scriptBody: "x", facts: FACTS, now: NOW })).toThrow();
+  });
+});
+
+/**
+ * The agent shipped knowing nothing about the company, so it answered "I don't know" to every
+ * qualifying question a property manager asks before handing over a decision-maker.
+ */
+describe("the company facts", () => {
+  it("states a licence that is current", () => {
+    expect(renderFacts(FACTS, NOW)).toContain("RBCO007813");
+  });
+
+  it("states the facts that do not expire", () => {
+    const out = renderFacts(FACTS, NOW);
+    expect(out).toContain("Maintenance: 2 technicians.");
+    expect(out).toContain("wo@transparentmaintenance.com");
+  });
+
+  it("keeps a registration number that has no expiry", () => {
+    expect(renderFacts(FACTS, new Date("2030-01-01T00:00:00Z"))).toContain("22027249");
+  });
+
+  // The one that matters: a certificate is a claim about the present tense. Still telling a property
+  // manager the company is a certified renovation firm the day after it lapsed is a false statement.
+  it("drops a licence the day after it expires", () => {
+    const after = renderFacts(FACTS, new Date("2026-12-15T09:00:00Z"));
+    expect(after).not.toContain("GA-EPD-RRP FIRM-398659");
+    expect(after).toContain("RBCO007813");   // the others are untouched
+  });
+
+  it("still states it on the last day it is valid", () => {
+    expect(renderFacts(FACTS, new Date("2026-12-14T23:00:00Z"))).toContain("GA-EPD-RRP FIRM-398659");
+  });
+
+  it("never claims the company is insured", () => {
+    // Licences and insurance are different things, and the auto liability COI is expired.
+    const out = renderFacts(FACTS, NOW);
+    expect(out).toContain("Do not say the company is insured");
+  });
+
+  it("tells the agent to say it does not know rather than invent a fact", () => {
+    expect(renderFacts(FACTS, NOW)).toContain("say you do not know");
+  });
+
+  it("carries the facts into the assembled prompt", () => {
+    expect(prompt).toContain("## What you may state about the company");
+    expect(prompt).toContain("RBCO007813");
+  });
+
+  it("never leaks a referral or a personal detail", () => {
+    // Michael's instruction: no referrals. And nothing personal from the renovator certificate.
+    for (const banned of ["Silberman", "Square Properties", "All County Legacy", "Emerald", "11/16/1995", "Sherwin"]) {
+      expect(prompt).not.toContain(banned);
+    }
   });
 });
 

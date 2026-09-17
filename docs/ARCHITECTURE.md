@@ -457,6 +457,27 @@ So the job now owns four things:
 | `model.messages[0]` (the system prompt) | `packages/adapters/src/vapi/conversation.ts` | How Joe behaves is a code review, for the same reason |
 | `backgroundSound` + the speech plan | `conversation.ts` | Turn-taking and ambience decide whether a call is usable at all |
 
+**What Joe may state about the company is the one thing not owned here.** It comes from TM-OS
+(`ops.licences` and `ops.company_facts`, its decision 0031) over the `tmos` adapter, and only rows a
+person marked `sayable` are returned at all. The prompt is still assembled in `conversation.ts`, but
+the facts inside it are edited on the TM-OS **Licences** tab, because a claim the agent makes to a
+prospect must be revocable without a deploy — and because a crew count changes with hiring.
+
+Two consequences worth knowing:
+
+- **`renderFacts` drops any licence past its expiry**, evaluated at sync time. A certificate is a
+  claim about the present tense: the lead-safe firm certificate expires 2026-12-14, and an agent
+  still calling the company a certified renovation firm on 2026-12-15 is making a false statement to
+  someone who may act on it. TM-OS files a renewal card 30 days out; if that is missed, the agent
+  goes quiet on the claim rather than carrying it forward.
+- **`desiredAssistant` fails closed.** If TM-OS returns no sayable rows it throws instead of pushing
+  a prompt with the facts stripped, which would leave a live assistant answering "I don't know" to
+  every qualifying question with nothing visibly broken. The sync is a reconciler, so the last good
+  assistant stays live and it retries next run.
+
+Nothing in the rendered facts claims insurance. Licences and insurance are different things, the
+company's auto liability certificate is currently expired, and the prompt says so explicitly.
+
 It still stops short of the model choice, the transcriber and the tool wiring. `updateAssistant` **reads** the live assistant and replaces only `model.messages`, because Vapi replaces a nested object wholesale on PATCH and sending a freshly built `model` would silently drop the assistant's tools. Which LLM it runs and which tools it can call stay dashboard decisions.
 
 `voiceId` is not in this file: which voice Joe *is* stays in `ELEVENLABS_VOICE_ID`, so swapping voices is a config change, while how he *sounds* is a code review.

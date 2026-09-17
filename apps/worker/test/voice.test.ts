@@ -30,6 +30,32 @@ beforeEach(async () => {
   await t.db.update(scriptVersion).set({ active: true }).where(eq(scriptVersion.name, "v1-atlanta-pm"));
 });
 
+/**
+ * The sync reads the company facts from TM-OS, so it depends on a system outside this repo. It must
+ * fail closed: a prompt with the facts silently stripped would leave a live assistant that answers
+ * "I don't know" to every qualifying question, and nothing would look broken while it happened.
+ */
+describe("company facts come from TM-OS, and the sync fails closed without them", () => {
+  it("builds a prompt carrying a sayable licence number", async () => {
+    const d = await desiredAssistant(ctx);
+    expect(d.systemPrompt).toContain("What you may state about the company");
+    expect(d.systemPrompt).toContain("RBCO007813");
+  });
+
+  it("drops a licence that has lapsed by the time of the call", async () => {
+    // The lead-safe firm certificate expires 2026-12-14; the day after, the claim is false.
+    const d = await desiredAssistant(ctx, new Date("2026-12-15T09:00:00Z"));
+    expect(d.systemPrompt).not.toContain("GA-EPD-RRP FIRM-398659");
+    expect(d.systemPrompt).toContain("RBCO007813");
+  });
+
+  it("refuses to sync an assistant that knows nothing about the company", async () => {
+    const bare = ctxWith();
+    bare.adapters.tmos.listCompanyFacts = async () => ({ licences: [], facts: [] });
+    await expect(desiredAssistant(bare)).rejects.toThrow(/no sayable company facts/);
+  });
+});
+
 /** The reviewed desired state, as a fixture. */
 const desired: AssistantDesiredState = {
   firstMessage: "Hello.",
