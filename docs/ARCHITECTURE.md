@@ -39,7 +39,7 @@ flowchart LR
   end
 
   subgraph supabase["Supabase TM1"]
-    pg[("Postgres<br/>schema agents · 17 tables<br/>RLS enabled, zero policies")]:::store
+    pg[("Postgres<br/>schema agents · 17 tables · 8 migrations<br/>RLS enabled, zero policies")]:::store
   end
 
   reviewer -->|"HTTPS"| console
@@ -318,7 +318,7 @@ flowchart TD
   classDef warn fill:#f9ece2,stroke:#a8501a,color:#111
   classDef gap fill:#fff,stroke:#a8501a,stroke-dasharray:5 3,color:#a8501a
 
-  A["Today: DIAL_MODE = dry_run · DNC_SCRUB = off<br/>20 of 25 vendor keys set · all 8 adapters mock"]:::now
+  A["Today: DIAL_MODE = dry_run<br/>every adapter mock, whatever the keys say"]:::now
   A --> B{"set DIAL_MODE = verified_only<br/>+ DIAL_ALLOWLIST = your numbers"}
   B --> C{"config loader<br/>6 dial-path keys (DNC dropped by the flag) + REDIS_URL present?"}
   C -->|"no"| X["api and worker refuse to boot<br/>error names the missing key"]:::warn
@@ -347,9 +347,9 @@ flowchart TD
 | **r2** | mock | still mock, named in the boot warning | 4 keys (in hand) and a bucket decision (`tm-call-recordings`, not `tm-os-1`) |
 | **hcp** | mock — returns the seed fixture | real: `materialize` pulls the 8 real technicians, their jobs and the company windows every 15 min; `createJob` writes back after approval | `account.hcp_customer_id` on the account being booked — without it `createJob` refuses with `customer_required` rather than guessing a customer |
 | **`/health`** | `mock` for all 8, `ok:true` regardless | Per-vendor truth; a bad credential finally shows as `ok:false` | — |
-| **Telnyx call events** | nothing arrives | Telnyx POSTs to `/webhooks/telnyx` and gets **404** | The route — `telnyxWebhookOk()` is written and untested against a caller |
-| **Vapi end-of-call-report** | disposition, duration, cost, transcript, task retry written by `postcall.process` (2026-09-13) | recording to R2 and `apollo.logCall` still missing | R2 bucket decision; Apollo plan with call logging |
-| **Disclosure line** | enforced by Vapi config, checked on every transcript by `postcall.process` | — | — |
+| **Telnyx call events** | nothing arrives | Telnyx POSTs to `/webhooks/telnyx` and the carrier's hangup cause, answer time and per-leg cost land on the `call` row | Nothing — the route is built and tested through a real Ed25519 keypair |
+| **Vapi end-of-call-report** | disposition, duration, cost, transcript, `disclosure_ok`, task retry, recording to R2 and `apollo.logCall` all written | same, for real | An R2 bucket decision (R2 is **not** in the dial-path keys, so leaving `dry_run` does not make it real) and an Apollo plan that permits `POST /phone_calls` |
+| **Disclosure line** | pushed to Vapi by `vapi.syncAssistant` (outside `dry_run` only) and checked on every transcript by `postcall.process`, with the verdict on `call.disclosure_ok` | — | `ELEVENLABS_VOICE_ID` set and one sync run outside `dry_run`, or the live assistant keeps whatever opening line the dashboard holds |
 | **Database rows** | seed fixture only | same rows drive real calls | `script_version` (active), `did`, `campaign` with `apollo_saved_search_id` + `status='active'`. `pnpm db:seed` has never run against TM1 |
 
 Every row in this table is now a *missing thing* rather than a regression: the HCP client that used to turn `real` mode into a 15-minute failure loop is written and its reads are verified against the live account. The remaining code gaps — the two webhook routes and the Phase 5 post-call pipeline — degrade nothing that works today.
@@ -366,7 +366,7 @@ Every row in this table is now a *missing thing* rather than a regression: the H
 | Compliance | `packages/compliance`, dnc adapter, `/tools/opt_out` | `consent_event` (append-only), `suppression` (unique on `phone_e164`, never keyed on contact) |
 | Availability & booking | api availability service, booking routes, console `/book`, hcp adapter | `technician`, `schedule_block`, `service_address`, `booking` |
 | Fulfillment | worker `hcp.createJob` / `graph.createEvent` / `resend.sendPacket`, reviewer | `calendar_invite`, `email_send` |
-| Post-call (Phase 5) | worker `postcall.process` (stub), r2 adapter, `retention.sweep` | `recording` (`retain_until` ≥ 5y, DB check constraint), `transcript` |
+| Post-call | worker `postcall.process` / `postcall.recording` / `apollo.logCall`, vapi + r2 + apollo adapters, `retention.sweep` | `recording` (`retain_until` ≥ 5y, DB check constraint), `transcript`, and on `call`: `disposition`, `cost_usd`, `disclosure_ok`, `apollo_phone_call_id`, `telnyx_hangup_cause`, `telnyx_cost_usd` |
 | CRM sync | apollo adapter, `apollo.syncCampaign` | `account`, `contact` |
 
 ---
@@ -436,23 +436,28 @@ A note on `style`: it is ignored outside V2-class models, and the failure is sil
 
 ---
 
-## 10. Status — one row per component, as of 2026-09-13
+## 10. Status — one row per component, as of 2026-09-17
+
+Every row below was checked against the code, not carried forward. The previous version of this table was dated 2026-09-13 and had drifted in **both** directions: it claimed `/webhooks/vapi` did not exist when it had been built, and claimed recordings and `apollo.logCall` were done differently than they were. A status table that is wrong in the optimistic direction is worse than no table, because it is the thing someone reads before deciding a pilot is ready.
 
 | Layer | Component | Where | State |
 |---|---|---|---|
-| Front-end | Campaign console (dashboard) | `apps/console/app/page.tsx` | **Deployed.** Reads `/health`, `/campaigns`, pending `/bookings`. Review and Live pages are placeholders (Phases 4/6) |
+| Front-end | Campaign console (dashboard) | `apps/console/app/page.tsx` | **Deployed.** Reads `/health`, `/campaigns`, pending `/bookings` |
+| Front-end | Review queue `/review` | `apps/console/app/review` | **Built.** Approve/reject and a per-campaign stop button. `reviewed_by` is typed by the reviewer — the console has no auth, so the audit trail is self-asserted |
+| Front-end | Live board `/live` | `apps/console/app/live` | **Placeholder, and deliberately unbuilt.** Nothing knows a call is in progress: `/webhooks/vapi` drops every `status-update` message, `call` has no in-flight state, and there is no SSE transport. A "stop dialling" button was the useful half and is on `/review` |
 | Front-end | Self-schedule page `/book/[token]` | `apps/console/app/book` | **Deployed.** Calls the public booking routes |
 | Middleware | Tool API `/tools/*` | `apps/api/src/routes/tools.ts` | **Built and wired**: 4 Vapi function tools point at it with the shared secret |
 | Middleware | Booking API, review, availability, health | `apps/api/src/routes/*` | **Built** |
-| Middleware | Webhooks | `apps/api/src/routes/webhooks.ts` | `/hcp` exists and fails closed until a signing secret is configured; **`/telnyx` and `/vapi` do not exist** |
-| Middleware | Dial orchestrator, campaign ingest, requeue, fulfillment | `apps/worker/src/processors` | **Built.** `apollo.logCall` is a stub; `postcall.process` writes results but not recordings |
+| Middleware | Webhooks | `apps/api/src/routes/webhooks.ts` | **`/vapi` and `/telnyx` both built.** `/telnyx` verifies Ed25519 with a 5-minute replay window and records the carrier's hangup cause, answer time and per-leg cost. `/hcp` exists and fails closed until a signing secret is configured |
+| Middleware | Dial orchestrator, campaign ingest, requeue, fulfillment | `apps/worker/src/processors` | **Built, no stubs left.** `postcall.process` writes disposition, transcript, cost and `disclosure_ok`, then fans out to `postcall.recording` (R2) and `apollo.logCall`. A dial that fails after the gate committed returns the task to `queued` and refunds the attempt; `dial.requeue` also recovers tasks abandoned in `claimed` by a dead worker |
 | Middleware | Pre-dial gate, suppression, consent ledger, calling windows | `packages/compliance` | **Built.** `assertFirstUtterance` is called by `postcall.process` and its verdict persisted to `call.disclosure_ok` |
 | Middleware | Vendor adapters | `packages/adapters` | **8 of 8 real clients written.** hcp reads verified live; `POST /jobs` body mirrors HCP's own field names, unverified until the first real approval |
+| Middleware | Assistant reconciliation | `packages/adapters/src/vapi` | **Built.** `vapi.syncAssistant` owns the opening line, the voice, the system prompt, the speech plan, `backgroundSound` and `artifactPlan.recordingEnabled`. Model, transcriber and tool wiring stay dashboard decisions and are merged, never replaced |
 | Middleware | Config loader, logger, errors, job envelope | `packages/shared` | **Built.** Blank Railway variables read as unset |
-| Back-end | Postgres schema, 4 migrations, seed | `packages/db` | **Migrated on TM1.** Seed never run against it |
+| Back-end | Postgres schema, 8 migrations, seed | `packages/db` | **Migrated on TM1.** Seed never run against it, and the seeded campaign has no `apollo_saved_search_id`, so in production `apollo.syncCampaign` would create zero tasks |
 | Back-end | Redis | Railway plugin | **Running** |
 | Infra | Railway (api, worker, console) | `apps/*/Dockerfile` | **Deployed**, `api-production-d51a` / `console-production-e58c` |
-| Infra | CI | `.github/workflows/ci.yml` | typecheck · lint · **183 tests** · ERD check · build, on push to `main` and every PR |
+| Infra | CI | `.github/workflows/ci.yml` | typecheck · lint · **~340 tests** · ERD check · voice check · build, on push to `main` and every PR |
 | Vendor | Vapi | — | Assistant `db67c732` *TM Voice - Atlanta PM v1*, 4 tools. Voice and opening line now reconciled from this repo by `vapi.syncAssistant` (§9.1); the profile has **not** yet been applied to the live assistant. **0 phone numbers imported** |
 | Vendor | Telnyx | — | App `tm-voice-production` (`3047698443645487069`), API v2, Call Cost on. **0 DIDs, balance $5, KYC pending** |
 | Vendor | Microsoft Graph | — | Certificate set and uploaded to Entra; expires 2028-09-12 |

@@ -155,6 +155,24 @@ the path.
 does not implement and the catch-all is covering for it; (3) the model configured in the dashboard,
 which the repo does not own.
 
+## 7c. Working the review queue
+
+`AUTO_BOOK` is settled `false`, so every booking the agent creates waits for a person. That person
+uses `/review` on the console: pending bookings with approve and reject, and a **stop dialling**
+button per campaign.
+
+| Thing | Where | Note |
+|---|---|---|
+| Approve / reject a booking | `/review` | Approving queues three jobs — the Housecall Pro job, the calendar invite and the packet email. Each can still fail afterwards, and those failure states have no screen yet: check `calendar_invite.rsvp_status` and `email_send.status`. |
+| Stop a campaign mid-flight | `/review` → Stop dialling | Stops the **next** call. A call already in progress finishes; nothing hangs up a live call on a prospect. |
+| Resume | `/review` → Resume | Dialling picks up on the next `dial.tick`, within 60s. |
+
+**The console has no authentication.** None — no session, no login, no middleware. So the reviewer
+types their name and `booking.reviewed_by` records what they typed. That is good enough for two or
+three people who trust each other and is not an audit trail; before this is used by anyone else,
+the console needs real auth. It is the largest known gap in this system that is not a vendor
+dependency.
+
 ## 8. Operations
 
 - Dead letters: worker moves a job to queue `dead` after 5 failed attempts. `pnpm replay <queue> <job_id>` re-enqueues it.
