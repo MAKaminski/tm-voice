@@ -146,6 +146,19 @@ export const call = agents.table("call", {
   apolloPhoneCallId: text("apollo_phone_call_id"),
   vapiCallId: text("vapi_call_id"),
   telnyxCallControlId: text("telnyx_call_control_id"),
+  /**
+   * The carrier's own reason the call ended, from the Telnyx hangup event. Distinct from Vapi's
+   * `endedReason`: Vapi reports what the assistant saw, this is what the network did. The two
+   * disagree in the cases worth knowing about — a number that rings out versus one the carrier
+   * rejected both look like "no answer" from above.
+   */
+  telnyxHangupCause: text("telnyx_hangup_cause"),
+  /**
+   * Telnyx's charge for its leg, kept apart from `cost_usd` (Vapi's platform cost) rather than
+   * summed. They are different vendors' numbers and adding them at write time would make the
+   * cost-per-dial table in docs/RUNBOOK.md impossible to reconcile against either invoice.
+   */
+  telnyxCostUsd: numeric("telnyx_cost_usd", { precision: 8, scale: 4 }),
   costUsd: numeric("cost_usd", { precision: 8, scale: 4 }).notNull().default("0"),
   /**
    * Whether the fixed disclosure line was spoken verbatim as the first utterance (rule 10).

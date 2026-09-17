@@ -50,6 +50,13 @@
       "when": 1789670551182,
       "tag": "0006_pale_true_believers",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789670856280,
+      "tag": "0007_true_ulik",
+      "breakpoints": true
     }
   ]
 }

@@ -106,8 +106,8 @@ flowchart LR
   vapi -->|"BYO SIP trunk<br/>Telnyx DID must be imported into Vapi first"| telnyx
   telnyx -->|"PSTN"| prospect
   vapi -->|"POST /tools/* · header X-Vapi-Secret<br/>get_availability · book_job · send_packet · opt_out"| api
-  vapi -.->|"end-of-call-report<br/>POST /webhooks/vapi → postcall.process"| api
-  telnyx -.->|"call events · Ed25519 headers<br/>needs POST /webhooks/telnyx — NOT BUILT"| api
+  vapi -->|"end-of-call-report<br/>POST /webhooks/vapi → postcall.process"| api
+  telnyx -->|"call events · Ed25519 headers<br/>POST /webhooks/telnyx"| api
 
   worker -->|"GET /employees · GET /jobs?scheduled_start_min/max · GET /company/schedule_availability<br/>POST /jobs · Bearer HCP_API_KEY · tm-voice:&lt;id&gt; tag"| hcp
   hcp -.->|"job.* webhooks · x-housecallpro-signature<br/>no signing secret yet — route answers 401"| api
@@ -228,7 +228,7 @@ Three things in that sequence are load-bearing and easy to miss:
 
 1. **The gate runs six checks in a fixed order, first failure wins**: surface (line type × consent, plus the MA two-party-recording exclusion) → suppression → DNC → calling window → per-DID daily cap → attempt cap. It is a pure function (`runGate`) with no I/O, so every branch is unit-tested; `gateAndClaim` is the thin I/O wrapper around it.
 2. **`call_task` rows have to exist before any of this fires.** `apollo.syncCampaign` (hourly) creates them from a campaign's saved search, one per (campaign, contact), enforced by a unique index. No campaign with `apollo_saved_search_id` set and `status='active'` ⇒ the dialer idles forever with nothing to claim and no error.
-3. **The disclosure line is enforced by configuration, not at runtime.** Vapi's `firstMessage` is set to `SCRIPT_VERSION.disclosure_line` byte-for-byte, and the system prompt forbids re-introduction. `assertFirstUtterance()` exists in `packages/compliance` but **has no caller** — the runtime check belongs in the post-call pipeline (Phase 5) once transcripts arrive.
+3. **The disclosure line is enforced twice.** Vapi's `firstMessage` is set to `SCRIPT_VERSION.disclosure_line` byte-for-byte by `vapi.syncAssistant`, and the system prompt forbids re-introduction. After the call, `postcall.process` runs `assertFirstUtterance()` against the first assistant turn and writes the verdict to `call.disclosure_ok` — so a breach is queryable afterwards rather than only visible in a log retention window, and it is written into the Apollo note where whoever follows the account up will see it.
 
 ---
 
@@ -247,16 +247,16 @@ flowchart TB
   c2["anyone<br/>GET /health"]:::pub
   c3["prospect<br/>GET+POST /book/:token"]:::pub
   v1["Vapi tool calls<br/>POST /tools/get_availability · book_job · send_packet · opt_out · capture_contact<br/>plus a catch-all: an unrouted tool answers at once instead of timing out"]:::ok
-  v2["Vapi end-of-call-report<br/>POST /webhooks/vapi"]:::gap
-  t1["Telnyx call events<br/>POST /webhooks/telnyx"]:::gap
+  v2["Vapi end-of-call-report<br/>POST /webhooks/vapi"]:::ok
+  t1["Telnyx call events<br/>POST /webhooks/telnyx"]:::ok
   h1["Housecall Pro job.* webhooks<br/>POST /webhooks/hcp"]:::gap
 
   c1 -->|"Bearer INTERNAL_API_TOKEN<br/>internalAuth · constant-time compare"| api
   c2 -->|"no auth<br/>returns dial_mode + 8 vendor modes"| api
   c3 -->|"contact.booking_token in the path<br/>one row per contact, no session"| api
   v1 -->|"header X-Vapi-Secret = VAPI_WEBHOOK_SECRET<br/>vapiAuth · timingSafeEqual · raw body stashed<br/>ToolIdempotency: 24h Redis TTL per toolCall id"| api
-  v2 -.->|"same secret<br/>ROUTE NOT BUILT"| api
-  t1 -.->|"telnyx-signature-ed25519 + telnyx-timestamp<br/>telnyxWebhookOk() exists, has no caller<br/>ROUTE NOT BUILT"| api
+  v2 -->|"same secret · X-Vapi-Secret<br/>→ postcall.process → recording + apollo.logCall"| api
+  t1 -->|"telnyx-signature-ed25519 + telnyx-timestamp<br/>Ed25519 over timestamp|rawBody · 5 min replay window<br/>carrier hangup cause, answer time, per-leg cost"| api
   h1 -.->|"x-housecallpro-signature<br/>route exists · no signing secret configured<br/>fails closed with 401"| api
 ```
 
@@ -446,7 +446,7 @@ A note on `style`: it is ignored outside V2-class models, and the failure is sil
 | Middleware | Booking API, review, availability, health | `apps/api/src/routes/*` | **Built** |
 | Middleware | Webhooks | `apps/api/src/routes/webhooks.ts` | `/hcp` exists and fails closed until a signing secret is configured; **`/telnyx` and `/vapi` do not exist** |
 | Middleware | Dial orchestrator, campaign ingest, requeue, fulfillment | `apps/worker/src/processors` | **Built.** `apollo.logCall` is a stub; `postcall.process` writes results but not recordings |
-| Middleware | Pre-dial gate, suppression, consent ledger, calling windows | `packages/compliance` | **Built.** `assertFirstUtterance` has no caller |
+| Middleware | Pre-dial gate, suppression, consent ledger, calling windows | `packages/compliance` | **Built.** `assertFirstUtterance` is called by `postcall.process` and its verdict persisted to `call.disclosure_ok` |
 | Middleware | Vendor adapters | `packages/adapters` | **8 of 8 real clients written.** hcp reads verified live; `POST /jobs` body mirrors HCP's own field names, unverified until the first real approval |
 | Middleware | Config loader, logger, errors, job envelope | `packages/shared` | **Built.** Blank Railway variables read as unset |
 | Back-end | Postgres schema, 4 migrations, seed | `packages/db` | **Migrated on TM1.** Seed never run against it |
