@@ -307,3 +307,23 @@ describe("a tool with no route", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("an assistant Server URL pointed at /tools", () => {
+  it("names the misconfiguration instead of returning a bland 404", async () => {
+    // The docs used to say Server URL = /tools. Set that way, every end-of-call report lands here
+    // and the post-call pipeline never runs — silently, because a 404 on an unknown tool path is
+    // indistinguishable from a tool nobody built.
+    const res = await post("/tools/anything", {
+      message: { type: "end-of-call-report", call: { id: "vapi_wrong_url" }, endedReason: "customer-ended-call" },
+    });
+    expect(res.status).toBe(421);
+    const body = await json(res);
+    expect(body).toMatchObject({ error: "wrong_url", message_type: "end-of-call-report", expected_path: "/webhooks/vapi" });
+  });
+
+  it("still treats a genuine tool-calls body on an unknown path as an unbuilt tool", async () => {
+    const res = await post("/tools/does_not_exist", msg("does_not_exist"));
+    expect(res.status).toBe(200);
+    expect((await json(res)).results[0].error).toContain("do not go quiet");
+  });
+});

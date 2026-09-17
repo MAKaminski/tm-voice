@@ -287,8 +287,34 @@ export function toolRoutes() {
    */
   app.all("/*", async (c) => {
     const raw = c.get("rawBody" as never) as string;
-    const parsed = toolCallMessage.safeParse(JSON.parse(raw || "{}"));
+    const body = JSON.parse(raw || "{}") as { message?: { type?: string } };
     const path = new URL(c.req.url).pathname;
+
+    /**
+     * The misconfiguration this repo's own docs used to cause, and the reason it went unnoticed.
+     *
+     * Vapi has two URL settings: the ASSISTANT's Server URL, which receives `end-of-call-report`,
+     * and each tool's own URL. `docs/CREDENTIALS.md` told Michael to point the assistant's Server
+     * URL at `/tools`. Set that way every end-of-call report lands here, matches no tool, and 404s
+     * — so `postcall.process` never runs and no call's disposition, transcript, cost, retry
+     * schedule or opt-out is ever recorded. Nothing alerted, because a 404 on an unknown tool path
+     * looks exactly like a tool that has not been built.
+     *
+     * It is deliberately NOT handled here by quietly forwarding it. A server message arriving on
+     * the wrong URL means the assistant is misconfigured, and silently absorbing it would hide that
+     * for as long as it lasted. It gets its own named error instead, at error level, saying what to
+     * change.
+     */
+    const type = body.message?.type;
+    if (type && type !== "tool-calls") {
+      logger.error(
+        { path, message_type: type, fix: "set the assistant's Server URL to /webhooks/vapi, not /tools" },
+        "vapi end-of-call report arrived on /tools: the assistant's Server URL is misconfigured and the post-call pipeline is not running",
+      );
+      return c.json({ error: "wrong_url", message_type: type, expected_path: "/webhooks/vapi" }, 421);
+    }
+
+    const parsed = toolCallMessage.safeParse(body);
     logger.error({ path }, "vapi called a tool with no route on this service");
     if (!parsed.success) return c.json({ error: "unknown_tool", path }, 404);
     return c.json({
