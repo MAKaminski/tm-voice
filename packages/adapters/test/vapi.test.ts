@@ -85,6 +85,7 @@ const desired = {
   systemPrompt: "You are Joe.",
   backgroundSound: "off" as const,
   speech: SPEECH_PLAN,
+  recordingEnabled: true as const,
 };
 
 describe("vapi assistant sync", () => {
@@ -92,6 +93,7 @@ describe("vapi assistant sync", () => {
   const liveBody = {
     id: "asst_1",
     model: { provider: "openai", model: "gpt-4o", toolIds: ["tool_book"], messages: [{ role: "system", content: "old" }] },
+    artifactPlan: { recordingEnabled: false, transcriptPlan: { enabled: true } },
   };
 
   it("PATCHes the owned surface", async () => {
@@ -127,7 +129,7 @@ describe("vapi assistant sync", () => {
     expect(body.model).toMatchObject({ provider: "openai", model: "gpt-4o", toolIds: ["tool_book"] });
     // And the transcriber is never sent at all.
     expect(Object.keys(body).sort()).toEqual([
-      "backgroundSound", "firstMessage", "maxDurationSeconds", "model",
+      "artifactPlan", "backgroundSound", "firstMessage", "maxDurationSeconds", "model",
       "silenceTimeoutSeconds", "startSpeakingPlan", "stopSpeakingPlan", "voice",
     ]);
   });

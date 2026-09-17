@@ -224,6 +224,25 @@ describe("POST /webhooks/vapi", () => {
     expect(p).toMatchObject({ vapi_call_id: "vapi_call_eoc", call_task_id: "8286b444-5d54-4145-8746-e3413fa90548", ended_reason: "voicemail", cost_usd: 0.09, structured: { outcome: "voicemail" } });
     expect(p.turns).toEqual([{ role: "assistant", text: "Hi", at_sec: 1.8 }, { role: "customer", text: "Leave a message", at_sec: 9 }]);
   });
+
+  it("carries the recording url through, which it used to drop on the floor", async () => {
+    const { postcallPayloadFrom } = await import("../src/routes/webhooks.js");
+    const withAudio = { ...report.message, artifact: { ...report.message.artifact, recordingUrl: "https://storage.vapi.ai/a.wav" } };
+    // The url arrived on every report and nothing read it, so no call recording was ever stored
+    // even though the disclosure line tells the prospect the call is being recorded.
+    expect(postcallPayloadFrom(withAudio as never)).toMatchObject({ recording_url: "https://storage.vapi.ai/a.wav" });
+  });
+
+  it("falls back to the stereo url when there is no mono one", async () => {
+    const { postcallPayloadFrom } = await import("../src/routes/webhooks.js");
+    const stereo = { ...report.message, artifact: { ...report.message.artifact, stereoRecordingUrl: "https://storage.vapi.ai/s.wav" } };
+    expect(postcallPayloadFrom(stereo as never)).toMatchObject({ recording_url: "https://storage.vapi.ai/s.wav" });
+  });
+
+  it("omits the field entirely when the report carried no recording", async () => {
+    const { postcallPayloadFrom } = await import("../src/routes/webhooks.js");
+    expect(postcallPayloadFrom(report.message as never)).not.toHaveProperty("recording_url");
+  });
 });
 
 describe("POST /tools/capture_contact", () => {

@@ -37,6 +37,7 @@ const desired: AssistantDesiredState = {
   systemPrompt: "You are Joe.",
   backgroundSound: "off",
   speech: SPEECH_PLAN,
+  recordingEnabled: true,
 };
 
 /**
@@ -50,6 +51,7 @@ function liveFrom(d: AssistantDesiredState, id = "asst_1") {
     firstMessage: d.firstMessage,
     voice: { ...d.voice },
     backgroundSound: d.backgroundSound,
+    artifactPlan: { recordingEnabled: d.recordingEnabled, transcriptPlan: { enabled: true } },
     model: {
       provider: "openai", model: "gpt-4o", toolIds: ["tool_book", "tool_optout"],
       messages: [{ role: "system", content: d.systemPrompt }],
@@ -105,8 +107,13 @@ describe("assistantDrift", () => {
   });
 
   it("treats a bare assistant as full drift across every owned field", () => {
-    // 1 opening line + 8 voice fields + prompt + backgroundSound + 5 speech fields.
-    expect(assistantDrift(desired, { id: "asst_1" })).toHaveLength(16);
+    // 1 opening line + 8 voice fields + prompt + backgroundSound + recording + 5 speech fields.
+    expect(assistantDrift(desired, { id: "asst_1" })).toHaveLength(17);
+  });
+
+  it("catches recording being switched off, which makes the disclosure line untrue", () => {
+    const live = { ...inSync(), artifactPlan: { recordingEnabled: false } };
+    expect(assistantDrift(desired, live)).toEqual(["artifactPlan.recordingEnabled"]);
   });
 
   it("catches the two settings Joe's call actually tripped over", () => {

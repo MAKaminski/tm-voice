@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import {
-  type AssistantDesiredState, BACKGROUND_SOUND, type LiveAssistant, SPEECH_PLAN, VOICE_PROFILE,
+  type AssistantDesiredState, BACKGROUND_SOUND, type LiveAssistant, RECORDING_ENABLED, SPEECH_PLAN, VOICE_PROFILE,
   buildSystemPrompt, systemPromptOf, vapiVoiceBlock,
 } from "@tm/adapters";
 import { scriptVersion } from "@tm/db";
@@ -33,6 +33,7 @@ export async function desiredAssistant(ctx: Ctx): Promise<AssistantDesiredState>
     systemPrompt: buildSystemPrompt({ disclosureLine: row.line, scriptBody: row.body }),
     backgroundSound: BACKGROUND_SOUND,
     speech: SPEECH_PLAN,
+    recordingEnabled: RECORDING_ENABLED,
   };
 }
 
@@ -47,6 +48,9 @@ export function assistantDrift(desired: AssistantDesiredState, live: LiveAssista
   // compared in full rather than by length or hash — a one-line edit still shows up as drift.
   if (systemPromptOf(live) !== desired.systemPrompt) drift.push("systemPrompt");
   if (live.backgroundSound !== desired.backgroundSound) drift.push("backgroundSound");
+  // Recording off is the one drift with a compliance consequence: the disclosure line says the
+  // call is being recorded, so an assistant with it switched off makes the agent say something untrue.
+  if (live.artifactPlan?.recordingEnabled !== desired.recordingEnabled) drift.push("artifactPlan.recordingEnabled");
   if (live.silenceTimeoutSeconds !== desired.speech.silenceTimeoutSeconds) drift.push("silenceTimeoutSeconds");
   if (live.maxDurationSeconds !== desired.speech.maxDurationSeconds) drift.push("maxDurationSeconds");
   if (live.startSpeakingPlan?.["waitSeconds"] !== desired.speech.startWaitSeconds) drift.push("startSpeakingPlan.waitSeconds");

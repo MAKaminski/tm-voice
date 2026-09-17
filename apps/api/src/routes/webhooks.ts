@@ -16,6 +16,9 @@ const vapiMessage = z.object({
     analysis: z.object({ summary: z.string().optional(), structuredData: z.record(z.unknown()).optional() }).passthrough().optional(),
     artifact: z.object({
       messages: z.array(z.object({ role: z.string(), message: z.string().optional(), secondsFromStart: z.number().optional() }).passthrough()).optional(),
+      /** Mono first, stereo as the fallback — the same preference `vapi.getCall` applies. */
+      recordingUrl: z.string().url().optional(),
+      stereoRecordingUrl: z.string().url().optional(),
     }).passthrough().optional(),
   }).passthrough(),
 });
@@ -25,6 +28,7 @@ const ROLE: Record<string, "assistant" | "customer" | "tool"> = { bot: "assistan
 /** Reduces a Vapi end-of-call-report to the postcall.process payload. Exported for tests. */
 export function postcallPayloadFrom(msg: z.infer<typeof vapiMessage>["message"]) {
   const name = msg.call?.name;
+  const recordingUrl = msg.artifact?.recordingUrl ?? msg.artifact?.stereoRecordingUrl;
   const turns = (msg.artifact?.messages ?? [])
     .filter((m) => ROLE[m.role])
     .map((m) => ({ role: ROLE[m.role]!, text: String(m.message ?? ""), at_sec: Math.round((m.secondsFromStart ?? 0) * 10) / 10 }));
@@ -37,6 +41,9 @@ export function postcallPayloadFrom(msg: z.infer<typeof vapiMessage>["message"])
     ...(msg.cost !== undefined ? { cost_usd: msg.cost } : {}),
     ...(msg.analysis?.summary ? { summary: msg.analysis.summary } : {}),
     ...(msg.analysis?.structuredData ? { structured: msg.analysis.structuredData } : {}),
+    // Previously dropped at the door: the URL arrived on every report and nothing read it, so no
+    // call recording was ever stored despite the disclosure line promising one.
+    ...(recordingUrl ? { recording_url: recordingUrl } : {}),
     turns,
   };
 }

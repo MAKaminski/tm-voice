@@ -1,7 +1,7 @@
 import { and, eq, gte, sql } from "drizzle-orm";
 import { assertFirstUtterance, suppress } from "@tm/compliance";
 import { booking, call, callTask, campaign, contact, scriptVersion, suppression, transcript } from "@tm/db";
-import { type Disposition, logger } from "@tm/shared";
+import { type Disposition, idempotencyKey, logger } from "@tm/shared";
 import type { Processor } from "../context.js";
 
 /** One turn of the call as Vapi reports it, reduced to what we keep. */
@@ -18,6 +18,8 @@ export type PostcallPayload = {
   summary?: string;
   /** analysisPlan.structuredDataPlan output; `outcome` is the one field the pipeline reads. */
   structured?: Record<string, unknown>;
+  /** Vapi's stored recording. Short-lived, which is why storing it is a separate retryable job. */
+  recording_url?: string;
   turns: Turn[];
 };
 
@@ -133,6 +135,29 @@ export const postcallProcess: Processor<PostcallPayload> = async (ctx, p) => {
       }).where(eq(callTask.id, task.id));
     }
   });
+
+  /**
+   * Storing the recording is its own job. The disposition, transcript and retry schedule above are
+   * the part that must not be recomputed, and inlining the download would mean a transient R2 or
+   * Vapi failure re-runs all of it. Vapi's recording URL is also short-lived, so this is the step
+   * most likely to need retries — which it now gets on its own, with a dead-letter entry naming
+   * the call rather than the whole post-call run.
+   */
+  if (p.recording_url) {
+    await ctx.producer.enqueue("postcall", "recording", {
+      entity_id: c.id,
+      idempotency_key: idempotencyKey("postcall", "recording", p.vapi_call_id),
+      attempt: 0,
+      enqueued_at: new Date().toISOString(),
+      vapi_call_id: p.vapi_call_id,
+      recording_url: p.recording_url,
+    });
+  } else {
+    // The disclosure line told the prospect this call was being recorded, so a report with no
+    // recording url means either the assistant has recording switched off — which the sync should
+    // have corrected — or Vapi dropped it. Worth a line either way.
+    logger.warn({ call_id: c.id, vapi_call_id: p.vapi_call_id }, "end-of-call report carried no recording url");
+  }
 
   logger.info({ call_id: c.id, disposition, ended_reason: p.ended_reason, customer_turns: customerTurns, disclosure_ok: disclosureOk }, "post-call processed");
   return { call_id: c.id, disposition, disclosure_ok: disclosureOk };

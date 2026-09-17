@@ -23,6 +23,19 @@ import { z } from "zod";
  */
 export const BACKGROUND_SOUND = "off" as const;
 
+/**
+ * Recording has to be ON, and it is a compliance requirement rather than a preference.
+ *
+ * The fixed disclosure line tells every prospect "This call is being recorded." Until now nothing
+ * on the dial path recorded anything — Vapi's recording setting was never configured and never
+ * diffed, and no `recording` row was ever written for a call. So the agent was making a statement
+ * to the prospect that was not true, and `docs/COMPLIANCE.md`'s commitment to keep the recording
+ * for five years had nothing to keep.
+ *
+ * Owned here so it cannot be switched off in the dashboard without the sync putting it back.
+ */
+export const RECORDING_ENABLED = true as const;
+
 export const speechPlanSchema = z.object({
   /**
    * How long the caller must be silent before Joe assumes his turn has started. Vapi's default is

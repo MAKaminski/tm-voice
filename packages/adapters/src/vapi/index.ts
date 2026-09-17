@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { AdapterError, type Config } from "@tm/shared";
 import { z } from "zod";
 import { type Adapter, MockRecorder, assertDialAllowed, e164, request, useMock, validate } from "../base.js";
-import { BACKGROUND_SOUND, SPEECH_PLAN, type SpeechPlan, speechPlanSchema } from "./conversation.js";
+import { BACKGROUND_SOUND, RECORDING_ENABLED, SPEECH_PLAN, type SpeechPlan, speechPlanSchema } from "./conversation.js";
 import { vapiVoiceSchema } from "./voice.js";
 
 export * from "./conversation.js";
@@ -39,6 +39,8 @@ export const assistantDesiredState = z.object({
   systemPrompt: z.string().min(1),
   backgroundSound: z.literal("off"),
   speech: speechPlanSchema,
+  /** Maps to Vapi's artifactPlan.recordingEnabled. The disclosure line promises this is true. */
+  recordingEnabled: z.literal(true),
 });
 export type AssistantDesiredState = z.infer<typeof assistantDesiredState>;
 
@@ -48,6 +50,7 @@ export interface LiveAssistant {
   firstMessage?: string;
   voice?: Record<string, unknown>;
   backgroundSound?: string;
+  artifactPlan?: Record<string, unknown> & { recordingEnabled?: boolean };
   model?: Record<string, unknown> & { messages?: { role: string; content?: string }[] };
   silenceTimeoutSeconds?: number;
   maxDurationSeconds?: number;
@@ -72,6 +75,15 @@ export function mergeSystemPrompt(live: LiveAssistant, systemPrompt: string): Re
   else messages.unshift({ role: "system", content: systemPrompt });
   model["messages"] = messages;
   return model;
+}
+
+/**
+ * Merge recording into the live artifact plan. Same reasoning as `mergeSystemPrompt`: the plan also
+ * carries the transcript and structured-data configuration that `postcall.process` depends on, and
+ * a rebuilt object would drop it.
+ */
+export function mergeArtifactPlan(live: LiveAssistant, recordingEnabled: boolean): Record<string, unknown> {
+  return { ...(live.artifactPlan ?? {}), recordingEnabled };
 }
 
 /** The Vapi fields a speech plan maps onto. Kept next to the plan so the mapping is reviewable. */
@@ -103,6 +115,14 @@ export interface VapiAdapter extends Adapter {
    */
   updateAssistant(id: string, desired: AssistantDesiredState, live?: LiveAssistant): Promise<{ id: string; synthetic: boolean }>;
   /**
+   * Fetch a recording Vapi has stored. The URL comes from the end-of-call report or `getCall`, and
+   * is short-lived — which is why the caller is a retryable job rather than an inline step.
+   *
+   * Lives in the adapter rather than the processor because it is a vendor fetch like any other
+   * (rule 1), and because the timeout and error classification then match every other Vapi call.
+   */
+  downloadRecording(url: string): Promise<{ bytes: Uint8Array; contentType: string }>;
+  /**
    * Verifies a Vapi server webhook. Vapi sends the configured server secret as `x-vapi-secret`;
    * an HMAC-SHA256 in `x-vapi-signature` is also accepted for forward compatibility.
    */
@@ -133,10 +153,17 @@ export function createVapiAdapter(cfg: Config): VapiAdapter & { mock?: MockRecor
         return { id: `dryrun_${v.metadata.call_task_id}`, synthetic: true };
       },
       async getCall(id) { mock.record("getCall", id); return { id, status: "ended" }; },
+      async downloadRecording(url) {
+        mock.record("downloadRecording", url);
+        return { bytes: new TextEncoder().encode(`mock-audio:${url}`), contentType: "audio/wav" };
+      },
       async getAssistant(id) { mock.record("getAssistant", id); return { id }; },
       async updateAssistant(id, desired, live) {
         const v = validate("vapi", assistantDesiredState, desired);
-        mock.record("updateAssistant", id, v, { model: mergeSystemPrompt(live ?? { id }, v.systemPrompt) });
+        mock.record("updateAssistant", id, v, {
+          model: mergeSystemPrompt(live ?? { id }, v.systemPrompt),
+          artifactPlan: mergeArtifactPlan(live ?? { id }, v.recordingEnabled),
+        });
         // dry_run never mutates a live assistant; the recorder is what the test and the log read.
         return { id, synthetic: true };
       },
@@ -198,6 +225,23 @@ export function createVapiAdapter(cfg: Config): VapiAdapter & { mock?: MockRecor
         transcript: res.artifact?.transcript,
       };
     },
+    async downloadRecording(url) {
+      // Not through `request()`: that helper decodes JSON, and this is audio. The error shape is
+      // mapped by hand to match what every other Vapi method throws.
+      let res: Response;
+      try {
+        res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+      } catch (e) {
+        throw new AdapterError({ vendor: "vapi", code: "network_error", retryable: true, raw: (e as Error).message });
+      }
+      if (!res.ok) {
+        // A recording URL expires, and an expired one is not worth retrying forever.
+        throw new AdapterError({ vendor: "vapi", code: `http_${res.status}`, retryable: res.status === 429 || res.status >= 500, raw: url });
+      }
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.byteLength === 0) throw new AdapterError({ vendor: "vapi", code: "empty_recording", retryable: false, raw: url });
+      return { bytes, contentType: res.headers.get("content-type") ?? "audio/wav" };
+    },
     async getAssistant(id) {
       const res = await request<LiveAssistant & { id?: string }>({
         vendor: "vapi", url: `${API}/assistant/${encodeURIComponent(id)}`, headers: auth,
@@ -216,6 +260,7 @@ export function createVapiAdapter(cfg: Config): VapiAdapter & { mock?: MockRecor
           voice: v.voice,
           backgroundSound: v.backgroundSound,
           model: mergeSystemPrompt(current, v.systemPrompt),
+          artifactPlan: mergeArtifactPlan(current, v.recordingEnabled),
           ...speechFields(v.speech),
         },
       });

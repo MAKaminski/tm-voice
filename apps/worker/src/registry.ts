@@ -4,6 +4,7 @@ import { availabilityInvalidate, availabilityMaterialize } from "./processors/av
 import { apolloSyncCampaign, dialRequeue } from "./processors/campaign.js";
 import { dialClaim, dialTick } from "./processors/dial.js";
 import { postcallProcess } from "./processors/postcall.js";
+import { postcallRecording } from "./processors/recording.js";
 import { graphCreateEvent, hcpCreateJob, resendSendPacket } from "./processors/fulfillment.js";
 import { retentionSweep } from "./processors/retention.js";
 import { vapiSyncAssistant } from "./processors/voice.js";
@@ -15,7 +16,7 @@ const p = (x: Processor<never> | Processor) => x as AnyProcessor;
 /** queue → job name → processor. One place. */
 export const REGISTRY: Record<QueueName, Record<string, AnyProcessor>> = {
   dial: { claim: p(dialClaim as Processor), tick: p(dialTick), requeue: p(dialRequeue as Processor) },
-  postcall: { process: p(postcallProcess as unknown as Processor) },
+  postcall: { process: p(postcallProcess as unknown as Processor), recording: p(postcallRecording as unknown as Processor) },
   hcp: { createJob: p(hcpCreateJob) },
   graph: { createEvent: p(graphCreateEvent) },
   resend: { sendPacket: p(resendSendPacket) },
