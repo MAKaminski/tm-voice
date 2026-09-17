@@ -7,14 +7,17 @@ const allKeys = Object.fromEntries([
   "APOLLO_API_KEY","HCP_API_KEY","TELNYX_API_KEY","TELNYX_CONNECTION_ID","TELNYX_PUBLIC_KEY","VAPI_PRIVATE_KEY","VAPI_WEBHOOK_SECRET",
   "VAPI_ASSISTANT_ID","DEEPGRAM_API_KEY","ELEVENLABS_API_KEY","ELEVENLABS_VOICE_ID","LLM_PROVIDER","LLM_API_KEY","LLM_MODEL","RESEND_API_KEY",
   "MAIL_FROM","MS_TENANT_ID","MS_CLIENT_ID","MS_CLIENT_CERT_PEM","MS_BOOKING_MAILBOX","R2_ACCOUNT_ID","R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY","R2_BUCKET","DNC_API_KEY",
+  "DISCORD_BOT_TOKEN","WATCH_CHANNEL_IDS","STT_BATCH_PROVIDER","STT_BATCH_API_KEY","TMOS_SUPABASE_URL","TMOS_SERVICE_KEY","TMOS_BOARD_URL",
 ].map((k) => [k, "x"]));
+// The llm adapter refuses to construct for a provider it cannot speak, so this cannot stay "x".
+allKeys.LLM_PROVIDER = "anthropic";
 
 describe("adapters in dry_run", () => {
   const cfg = loadConfig(base);
   const a = createAdapters(cfg);
-  it("all eight are mocks and healthy", async () => {
+  it("all twelve are mocks and healthy", async () => {
     const h = await healthcheckAll(a);
-    expect(h).toHaveLength(8);
+    expect(h).toHaveLength(12);
     expect(h.every((x) => x.ok && x.mode === "mock")).toBe(true);
   });
   it("vapi returns a synthetic call and never networks", async () => {

@@ -10,6 +10,15 @@ Source of truth is `packages/db/src/schema.ts`. The diagram is hand-maintained f
 - `schedule_block` is materialized from HCP jobs + PTO + windows; invalidated by webhook and every 15 min.
 - `call_task.gate_result` is written in the same transaction that claims the task (`packages/compliance/src/gate.ts`).
 - `recording.retain_until` = created + 5 years, enforced by check constraint `recording_retain_5y`; the retention sweeper never deletes earlier.
+- `recording`, `transcript` and `consent_event` each have exactly one parent, enforced by check
+  constraints in `packages/db/migrations/0007_meeting_parents.sql`: a recording belongs to a `call`
+  **or** a `speaker_track`; a transcript to a `call` **or** a `meeting`; a consent event to a
+  `contact` **or** a `meeting`. Never both, never neither.
+- `recording_retain_5y` is table-wide, so Discord meeting audio inherits the same 5-year floor and
+  is swept by the same `retention.sweep` job as call recordings.
+- `meeting.session_id` is UNIQUE and is the idempotency anchor for the whole capture pipeline;
+  `speaker_track` is UNIQUE on (`meeting_id`, `discord_user_id`) and carries its own
+  `transcription_state` so a crash mid-transcode resumes rather than re-filing.
 
 ## Diagram
 
@@ -25,6 +34,10 @@ erDiagram
   CALL ||--o| RECORDING : stores
   CALL ||--o| TRANSCRIPT : yields
   CALL ||--o{ CONSENT_EVENT : emits
+  MEETING ||--o{ SPEAKER_TRACK : "splits into"
+  SPEAKER_TRACK ||--o| RECORDING : stores
+  MEETING ||--o| TRANSCRIPT : "merges to"
+  MEETING ||--o{ CONSENT_EVENT : "notice on join"
   CALL ||--o| BOOKING : "may create"
   CALL }o--o| DID : "placed from"
   CALL ||--o{ SUPPRESSION : "may source"
@@ -35,6 +48,10 @@ erDiagram
   TECHNICIAN ||--o{ SCHEDULE_BLOCK : has
   ACCOUNT ||--o{ SERVICE_ADDRESS : owns
 ```
+
+`MEETING` and `SPEAKER_TRACK` are the Discord capture path (`apps/capture`); they have no
+`CALL_TASK` and never touch the dial path. `RECORDING`, `TRANSCRIPT` and `CONSENT_EVENT` are shared
+by both paths, which is why their dial-path parent columns are now nullable — see the Rules below.
 
 Departures from the artifact diagram, both additive: `campaign.script_version_id` and `campaign.apollo_saved_search_id` carry the drawn relationships as real columns; `booking.contact_id` exists because the self-schedule page creates bookings with no `call`.
 
@@ -135,9 +152,34 @@ call
   cost_usd  numeric(8, 4)  [NOT NULL]
   created_at  timestamp with time zone  [NOT NULL]
   updated_at  timestamp with time zone  [NOT NULL]
+meeting
+  id  uuid  [PK]
+  discord_guild_id  text  [NOT NULL]
+  discord_channel_id  text  [NOT NULL]
+  session_id  text  [UK NOT NULL]
+  started_at  timestamp with time zone  [NOT NULL]
+  ended_at  timestamp with time zone
+  participant_count  integer  [NOT NULL]
+  transcription_state  transcription_state  [NOT NULL]
+  created_at  timestamp with time zone  [NOT NULL]
+  updated_at  timestamp with time zone  [NOT NULL]
+speaker_track
+  id  uuid  [PK]
+  meeting_id  uuid  [FK->meeting.id UK NOT NULL]
+  discord_user_id  text  [UK NOT NULL]
+  display_name  text
+  r2_key  text  [NOT NULL]
+  duration_sec  integer  [NOT NULL]
+  byte_size  integer  [NOT NULL]
+  transcription_state  transcription_state  [NOT NULL]
+  segments  jsonb  [NOT NULL]
+  created_at  timestamp with time zone  [NOT NULL]
+  updated_at  timestamp with time zone  [NOT NULL]
 recording
   id  uuid  [PK]
-  call_id  uuid  [FK->call.id NOT NULL]
+  call_id  uuid  [FK->call.id]
+  meeting_id  uuid  [FK->meeting.id]
+  speaker_track_id  uuid  [FK->speaker_track.id]
   r2_key  text  [NOT NULL]
   signed_url  text
   signed_url_expires_at  timestamp with time zone
@@ -146,7 +188,8 @@ recording
   updated_at  timestamp with time zone  [NOT NULL]
 transcript
   id  uuid  [PK]
-  call_id  uuid  [FK->call.id NOT NULL]
+  call_id  uuid  [FK->call.id]
+  meeting_id  uuid  [FK->meeting.id]
   turns  jsonb  [NOT NULL]
   summary  text
   structured  jsonb
@@ -154,8 +197,9 @@ transcript
   updated_at  timestamp with time zone  [NOT NULL]
 consent_event
   id  uuid  [PK]
-  contact_id  uuid  [FK->contact.id NOT NULL]
+  contact_id  uuid  [FK->contact.id]
   call_id  uuid  [FK->call.id]
+  meeting_id  uuid  [FK->meeting.id]
   event_type  consent_event_type  [NOT NULL]
   channel  text  [NOT NULL]
   capture_artifact  jsonb  [NOT NULL]

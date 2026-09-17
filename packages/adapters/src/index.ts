@@ -1,21 +1,29 @@
 import type { Config } from "@tm/shared";
 import { createApolloAdapter } from "./apollo/index.js";
+import { createDiscordAdapter } from "./discord/index.js";
 import { createDncAdapter } from "./dnc/index.js";
 import { createGraphAdapter } from "./graph/index.js";
 import { createHcpAdapter } from "./hcp/index.js";
+import { createLlmAdapter } from "./llm/index.js";
 import { createR2Adapter } from "./r2/index.js";
 import { createResendAdapter } from "./resend/index.js";
+import { createSttBatchAdapter } from "./stt-batch/index.js";
 import { createTelnyxAdapter } from "./telnyx/index.js";
+import { createTmosAdapter } from "./tmos/index.js";
 import { createVapiAdapter } from "./vapi/index.js";
 
 export * from "./base.js";
 export * from "./apollo/index.js";
+export * from "./discord/index.js";
 export * from "./dnc/index.js";
 export * from "./graph/index.js";
 export * from "./hcp/index.js";
+export * from "./llm/index.js";
 export * from "./r2/index.js";
 export * from "./resend/index.js";
+export * from "./stt-batch/index.js";
 export * from "./telnyx/index.js";
+export * from "./tmos/index.js";
 export * from "./vapi/index.js";
 
 export function createAdapters(cfg: Config) {
@@ -28,6 +36,12 @@ export function createAdapters(cfg: Config) {
     vapi: createVapiAdapter(cfg),
     r2: createR2Adapter(cfg),
     dnc: createDncAdapter(cfg),
+    // Discord capture path. None of these are on the dial path, so a missing key here leaves the
+    // dialer working and shows up as mode:"mock" on /health.
+    discord: createDiscordAdapter(cfg),
+    stt_batch: createSttBatchAdapter(cfg),
+    tmos: createTmosAdapter(cfg),
+    llm: createLlmAdapter(cfg),
   };
 }
 export type Adapters = ReturnType<typeof createAdapters>;
