@@ -1,6 +1,6 @@
 {
-  "id": "82f3abc7-7e60-4a0b-8695-744a218f6646",
-  "prevId": "b0aff390-60df-4a4c-b426-7405f08e3135",
+  "id": "bc0e390c-0693-4f13-888b-728ba80f7084",
+  "prevId": "82f3abc7-7e60-4a0b-8695-744a218f6646",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -373,6 +373,18 @@
         "telnyx_call_control_id": {
           "name": "telnyx_call_control_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "telnyx_hangup_cause": {
+          "name": "telnyx_hangup_cause",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "telnyx_cost_usd": {
+          "name": "telnyx_cost_usd",
+          "type": "numeric(8, 4)",
           "primaryKey": false,
           "notNull": false
         },

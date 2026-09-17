@@ -18,3 +18,12 @@ button.primary { background: var(--accent); color: #fff; border: 0; border-radiu
 button.primary:disabled { opacity: .5; cursor: default; }
 .empty { color: var(--muted); padding: 24px; text-align: center; border: 1px dashed var(--line); border-radius: 6px; }
 .err { color: var(--alert); }
+/* Review queue: a plain action button, the reviewer's name field, and a failure state that does
+   not read like an empty queue. */
+button.act { background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 5px 11px; font: inherit; font-size: 13px; cursor: pointer; }
+button.act:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button.act:disabled { opacity: .45; cursor: default; }
+.field { display: block; max-width: 420px; margin: 0 0 24px; font-size: 13px; color: var(--muted); }
+.field input { display: block; width: 100%; margin-top: 5px; padding: 9px 11px; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 5px; }
+.field input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.empty.bad { color: var(--alert); border-color: var(--alert); border-style: solid; background: #fdf6f6; text-align: left; }

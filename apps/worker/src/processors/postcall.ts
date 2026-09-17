@@ -1,7 +1,7 @@
 import { and, eq, gte, sql } from "drizzle-orm";
 import { assertFirstUtterance, suppress } from "@tm/compliance";
 import { booking, call, callTask, campaign, contact, scriptVersion, suppression, transcript } from "@tm/db";
-import { type Disposition, logger } from "@tm/shared";
+import { type Disposition, idempotencyKey, logger } from "@tm/shared";
 import type { Processor } from "../context.js";
 
 /** One turn of the call as Vapi reports it, reduced to what we keep. */
@@ -18,6 +18,8 @@ export type PostcallPayload = {
   summary?: string;
   /** analysisPlan.structuredDataPlan output; `outcome` is the one field the pipeline reads. */
   structured?: Record<string, unknown>;
+  /** Vapi's stored recording. Short-lived, which is why storing it is a separate retryable job. */
+  recording_url?: string;
   turns: Turn[];
 };
 
@@ -36,6 +38,18 @@ const STRUCTURED_OUTCOMES: Record<string, Disposition> = {
 /** Outcomes that finish the task even though a human follows up (disposition stays callback). */
 const CLOSES_TASK = new Set(["contact_captured", "packet_captured"]);
 const outcomeKey = (o: unknown) => (typeof o === "string" ? o.trim().toLowerCase() : "");
+
+/**
+ * The email address the assistant captured, if the analysis plan produced a usable one. Validated
+ * rather than trusted: a transcriber hearing an address read aloud produces near-misses often
+ * enough that writing one unchecked onto a contact would poison the record.
+ */
+export function capturedEmail(structured: Record<string, unknown> | undefined): string | undefined {
+  const raw = structured?.["contact_email"];
+  if (typeof raw !== "string") return undefined;
+  const v = raw.trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/.test(v) ? v : undefined;
+}
 
 /**
  * Pure. Facts we own (a booking or an opt-out written during the call) beat Vapi's ended reason,
@@ -69,6 +83,15 @@ export const postcallProcess: Processor<PostcallPayload> = async (ctx, p) => {
     .where(and(eq(suppression.phoneE164, ct.phoneE164), gte(suppression.createdAt, c.startedAt))).limit(1) : [];
   const customerTurns = p.turns.filter((t) => t.role === "customer").length;
   const outcome = outcomeKey(p.structured?.["outcome"]);
+
+  // The assistant sometimes reads an email back correctly but never calls capture_contact, so the
+  // address only exists in the call analysis. Persisting it here means the next call already has
+  // it instead of opening with "I don't have an email address on file" again.
+  const heardEmail = capturedEmail(p.structured);
+  if (heardEmail && ct && !ct.email) {
+    await ctx.db.update(contact).set({ email: heardEmail, updatedAt: new Date() }).where(eq(contact.id, ct.id));
+    logger.info({ contact_id: ct.id, call_id: c.id }, "email captured from call analysis");
+  }
   // The assistant heard an opt-out but no opt_out tool call wrote it: write it now, so the number is never dialed again.
   if (outcome === "opt_out" && !s && ct) {
     await suppress(ctx.db, { phoneE164: ct.phoneE164, reason: "opt-out heard on call (post-call analysis)", channel: "phone", callId: c.id, artifact: { vapi_call_id: p.vapi_call_id } });
@@ -90,7 +113,7 @@ export const postcallProcess: Processor<PostcallPayload> = async (ctx, p) => {
   const startedAt = p.started_at ? new Date(p.started_at) : c.startedAt;
   await ctx.db.transaction(async (tx) => {
     await tx.update(call).set({
-      disposition, endedAt,
+      disposition, endedAt, disclosureOk,
       durationSec: Math.max(0, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000)),
       costUsd: (p.cost_usd ?? 0).toFixed(4), updatedAt: new Date(),
     }).where(eq(call.id, c.id));
@@ -112,6 +135,48 @@ export const postcallProcess: Processor<PostcallPayload> = async (ctx, p) => {
       }).where(eq(callTask.id, task.id));
     }
   });
+
+  /**
+   * Storing the recording is its own job. The disposition, transcript and retry schedule above are
+   * the part that must not be recomputed, and inlining the download would mean a transient R2 or
+   * Vapi failure re-runs all of it. Vapi's recording URL is also short-lived, so this is the step
+   * most likely to need retries — which it now gets on its own, with a dead-letter entry naming
+   * the call rather than the whole post-call run.
+   */
+  if (p.recording_url) {
+    await ctx.producer.enqueue("postcall", "recording", {
+      entity_id: c.id,
+      idempotency_key: idempotencyKey("postcall", "recording", p.vapi_call_id),
+      attempt: 0,
+      enqueued_at: new Date().toISOString(),
+      vapi_call_id: p.vapi_call_id,
+      recording_url: p.recording_url,
+    });
+  } else {
+    // The disclosure line told the prospect this call was being recorded, so a report with no
+    // recording url means either the assistant has recording switched off — which the sync should
+    // have corrected — or Vapi dropped it. Worth a line either way.
+    logger.warn({ call_id: c.id, vapi_call_id: p.vapi_call_id }, "end-of-call report carried no recording url");
+  }
+
+  /**
+   * Tell the CRM the call happened. A job, not an inline call: Apollo offers no idempotency header,
+   * so the envelope's key is the only thing standing between a webhook retry and a duplicate
+   * activity on the contact.
+   */
+  await ctx.producer.enqueue("apollo", "logCall", {
+    entity_id: c.id,
+    idempotency_key: idempotencyKey("apollo", "logCall", p.vapi_call_id),
+    attempt: 0,
+    enqueued_at: new Date().toISOString(),
+    vapi_call_id: p.vapi_call_id,
+  });
+
+  if (disclosureOk === false) {
+    // Already logged at error level above; repeated here at the end of the run so the one line a
+    // reader greps for carries the call id and the disposition together.
+    logger.error({ call_id: c.id, disposition }, "rule 10 exception: the disclosure line was not spoken verbatim on this call");
+  }
 
   logger.info({ call_id: c.id, disposition, ended_reason: p.ended_reason, customer_turns: customerTurns, disclosure_ok: disclosureOk }, "post-call processed");
   return { call_id: c.id, disposition, disclosure_ok: disclosureOk };

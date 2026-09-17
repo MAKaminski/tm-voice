@@ -82,3 +82,45 @@ describe("api", () => {
     expect(enqueued).toContain("availability.materialize");
   });
 });
+
+describe("PATCH /campaigns/:id — the stop-dialling switch", () => {
+  it("requires the internal token", async () => {
+    const res = await app.request(`/campaigns/${r.campaign.id}`, {
+      method: "PATCH", body: JSON.stringify({ status: "paused" }), headers: { "content-type": "application/json" },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("pauses a campaign, which the gate then refuses to claim work for", async () => {
+    const res = await app.request(`/campaigns/${r.campaign.id}`, {
+      method: "PATCH", body: JSON.stringify({ status: "paused" }),
+      headers: { "content-type": "application/json", ...auth },
+    });
+    expect(res.status).toBe(200);
+    expect((await json(res)).campaign.status).toBe("paused");
+  });
+
+  it("resumes it again", async () => {
+    const res = await app.request(`/campaigns/${r.campaign.id}`, {
+      method: "PATCH", body: JSON.stringify({ status: "active" }),
+      headers: { "content-type": "application/json", ...auth },
+    });
+    expect((await json(res)).campaign.status).toBe("active");
+  });
+
+  it("refuses a status the schema does not have", async () => {
+    const res = await app.request(`/campaigns/${r.campaign.id}`, {
+      method: "PATCH", body: JSON.stringify({ status: "on fire" }),
+      headers: { "content-type": "application/json", ...auth },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("404s on a campaign that does not exist", async () => {
+    const res = await app.request("/campaigns/3f6d7d2a-1e6d-4c1b-9d3a-1f2e3d4c5b6a", {
+      method: "PATCH", body: JSON.stringify({ status: "paused" }),
+      headers: { "content-type": "application/json", ...auth },
+    });
+    expect(res.status).toBe(404);
+  });
+});

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_DIAL_TIMEZONE } from "./business-day.js";
 
 export const DIAL_MODES = ["dry_run", "verified_only", "live"] as const;
 export type DialMode = (typeof DIAL_MODES)[number];
@@ -109,7 +110,9 @@ export const configSchema = z
       .transform((s) => s.split(",").map((x) => x.trim()).filter(Boolean)),
     COMPLIANCE_TARGET_SURFACE: z.enum(TARGET_SURFACES).default("landline_only"),
     DNC_SCRUB: z.enum(DNC_SCRUB_MODES).default("required"),
-    AUTO_BOOK: bool.default(false),
+    /** Where the dialer's day starts, for the daily caps. See packages/shared/src/business-day.ts. */
+  DIAL_TIMEZONE: z.string().min(1).default(DEFAULT_DIAL_TIMEZONE),
+  AUTO_BOOK: bool.default(false),
     ALLOW_MA_RECORDING: bool.default(false),
     ...vendorShape,
   })

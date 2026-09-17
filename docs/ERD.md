@@ -149,7 +149,10 @@ call
   apollo_phone_call_id  text
   vapi_call_id  text
   telnyx_call_control_id  text
+  telnyx_hangup_cause  text
+  telnyx_cost_usd  numeric(8, 4)
   cost_usd  numeric(8, 4)  [NOT NULL]
+  disclosure_ok  boolean
   created_at  timestamp with time zone  [NOT NULL]
   updated_at  timestamp with time zone  [NOT NULL]
 meeting

@@ -40,6 +40,29 @@ Stored in `script_version.disclosure_line`; the seed's version:
 
 Covers artificial-voice notice, company name, purpose, recorded-line notice, and opt-out instruction in one utterance (47 CFR 64.1200(b), CA AB 2905, CA B.O.T. Act, Utah). Do not paraphrase. `assertFirstUtterance()` verifies it in Phase 4.
 
+### "Does it have to say it's an AI bot at the start?" — yes
+
+This comes up every time someone hears the opening line, so here is the answer once, clause by
+clause. Nothing in it is a style choice and nothing in it can be dropped to make the call warmer.
+
+| Clause | Why it is there | Can it go? |
+|---|---|---|
+| "an automated assistant using an artificial voice" | The FCC's February 2024 ruling makes an AI-generated voice an "artificial voice" under the TCPA. 47 CFR 64.1200(b)(1) requires the caller to state at the **outset** that the call is from an artificial or prerecorded voice. California's B.O.T. Act and Utah's AI disclosure law separately require a bot to say it is a bot. | **No.** Required at the start, by name. |
+| "on behalf of Transparent Maintenance" | Same rule: the identity of the business must be stated at the beginning. | **No.** |
+| "about property maintenance services" | 64.1200(b)(2) — the purpose of the call. | **No.** |
+| "This call is being recorded." | Two-party recording-consent states (CA, FL, IL, MA, PA, WA). The pilot list is Georgia, which is one-party, but a call to a business reaches whoever picks up and the line is recorded to durable storage, so the notice is given unconditionally. | Only by geofencing the campaign, which costs more than the sentence does. |
+| "You can say stop at any time…" | The TSR requires a prompt, cost-free opt-out mechanism, and this is what makes the intent-based opt-out in `/tools/opt_out` defensible. | **No.** |
+
+So the answer to the feedback is: it stays. What is worth knowing is that saying it up front is
+also the cheapest part of the call — a caller who is going to object to a bot will object either
+way, and doing it in the first sentence means they object before anyone's time is spent.
+
+**If the length is the real complaint**, the room to move is in the wording, not the content, and
+it is a counsel decision rather than an engineering one. Any revision has to keep all five clauses
+above, goes in `script_version.disclosure_line` as a **new row**, and only becomes live when that
+row is marked active — `vapi.syncAssistant` then pushes it verbatim. Do not edit the line in the
+Vapi dashboard: the sync reverts it within a day and the revert is logged.
+
 ## Opt-out and revocation
 
 - `/tools/opt_out` is synchronous: writes `suppression` (upsert on phone) and `consent_event(revoke)` for every contact carrying the number, then instructs the agent to end the call.

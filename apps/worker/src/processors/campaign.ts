@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { account, callTask, campaign, contact } from "@tm/db";
 import { logger } from "@tm/shared";
 import type { Ctx, Processor } from "../context.js";
@@ -95,15 +95,41 @@ export const apolloSyncCampaign: Processor<{ campaign_id?: string }> = async (ct
   return stats;
 };
 
+/**
+ * How long a task may sit in 'claimed' before it is treated as abandoned.
+ *
+ * A claim is followed within milliseconds by either a call row or the compensating requeue in
+ * dialClaim. Anything still 'claimed' minutes later belongs to a worker that died between the two
+ * — a deploy, an OOM, a SIGKILL — and no catch block can rescue that, because the process running
+ * it is gone. Generous enough that a slow vendor call is never mistaken for a dead worker.
+ */
+export const CLAIM_STALE_MS = 15 * 60_000;
+
 /** Re-queues tasks whose call ended without a booking, up to the campaign's max_attempts. */
 export const dialRequeue: Processor<{ campaign_id?: string }> = async (ctx) => {
+  const now = new Date();
   const rows = await ctx.db.select({ id: callTask.id }).from(callTask)
     .innerJoin(campaign, eq(campaign.id, callTask.campaignId))
     .where(and(eq(callTask.status, "blocked"), inArray(callTask.gateResult, ["window", "did_cap"])));
-  if (!rows.length) return { requeued: 0 };
-  // 'window' and 'did_cap' are timing refusals, not verdicts about the contact: the same task is
-  // eligible again later. surface/suppressed/dnc/attempts are terminal and stay blocked.
-  await ctx.db.update(callTask).set({ status: "queued", gateResult: null, updatedAt: new Date() })
-    .where(inArray(callTask.id, rows.map((r) => r.id)));
-  return { requeued: rows.length };
+  if (rows.length) {
+    // 'window' and 'did_cap' are timing refusals, not verdicts about the contact: the same task is
+    // eligible again later. surface/suppressed/dnc/attempts are terminal and stay blocked.
+    await ctx.db.update(callTask).set({ status: "queued", gateResult: null, updatedAt: now })
+      .where(inArray(callTask.id, rows.map((r) => r.id)));
+  }
+
+  // Tasks abandoned mid-dial by a worker that died. The attempt is refunded for the same reason
+  // dialClaim refunds it: nobody spoke to the contact, so nothing was spent on their behalf.
+  const stale = await ctx.db.select({ id: callTask.id }).from(callTask)
+    .where(and(eq(callTask.status, "claimed"), lt(callTask.claimedAt, new Date(now.getTime() - CLAIM_STALE_MS))));
+  if (stale.length) {
+    await ctx.db.update(callTask).set({
+      status: "queued", gateResult: null, claimedAt: null,
+      attemptNo: sql`greatest(${callTask.attemptNo} - 1, 0)`,
+      updatedAt: now,
+    }).where(inArray(callTask.id, stale.map((r) => r.id)));
+    logger.warn({ count: stale.length }, "recovered call_tasks abandoned in 'claimed' by a worker that died mid-dial");
+  }
+
+  return { requeued: rows.length, recovered: stale.length };
 };

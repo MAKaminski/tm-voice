@@ -1,6 +1,6 @@
 {
-  "id": "82f3abc7-7e60-4a0b-8695-744a218f6646",
-  "prevId": "b0aff390-60df-4a4c-b426-7405f08e3135",
+  "id": "8d2539c3-0abe-4595-ad07-55ff8b72c9f4",
+  "prevId": "bc0e390c-0693-4f13-888b-728ba80f7084",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -376,6 +376,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "telnyx_hangup_cause": {
+          "name": "telnyx_hangup_cause",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "telnyx_cost_usd": {
+          "name": "telnyx_cost_usd",
+          "type": "numeric(8, 4)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "cost_usd": {
           "name": "cost_usd",
           "type": "numeric(8, 4)",
@@ -699,10 +711,16 @@
           "name": "contact_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "call_id": {
           "name": "call_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "meeting_id": {
+          "name": "meeting_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
@@ -787,6 +805,20 @@
           "schemaTo": "agents",
           "columnsFrom": [
             "call_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "consent_event_meeting_id_meeting_id_fk": {
+          "name": "consent_event_meeting_id_meeting_id_fk",
+          "tableFrom": "consent_event",
+          "tableTo": "meeting",
+          "schemaTo": "agents",
+          "columnsFrom": [
+            "meeting_id"
           ],
           "columnsTo": [
             "id"
@@ -1149,6 +1181,123 @@
       "checkConstraints": {},
       "isRLSEnabled": true
     },
+    "agents.meeting": {
+      "name": "meeting",
+      "schema": "agents",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "discord_guild_id": {
+          "name": "discord_guild_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "discord_channel_id": {
+          "name": "discord_channel_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "ended_at": {
+          "name": "ended_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "participant_count": {
+          "name": "participant_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "transcription_state": {
+          "name": "transcription_state",
+          "type": "transcription_state",
+          "typeSchema": "agents",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "meeting_session_uq": {
+          "name": "meeting_session_uq",
+          "columns": [
+            {
+              "expression": "session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "meeting_channel_idx": {
+          "name": "meeting_channel_idx",
+          "columns": [
+            {
+              "expression": "discord_channel_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "started_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
     "agents.recording": {
       "name": "recording",
       "schema": "agents",
@@ -1164,7 +1313,19 @@
           "name": "call_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
+        },
+        "meeting_id": {
+          "name": "meeting_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "speaker_track_id": {
+          "name": "speaker_track_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         },
         "r2_key": {
           "name": "r2_key",
@@ -1214,6 +1375,34 @@
           "schemaTo": "agents",
           "columnsFrom": [
             "call_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "recording_meeting_id_meeting_id_fk": {
+          "name": "recording_meeting_id_meeting_id_fk",
+          "tableFrom": "recording",
+          "tableTo": "meeting",
+          "schemaTo": "agents",
+          "columnsFrom": [
+            "meeting_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "recording_speaker_track_id_speaker_track_id_fk": {
+          "name": "recording_speaker_track_id_speaker_track_id_fk",
+          "tableFrom": "recording",
+          "tableTo": "speaker_track",
+          "schemaTo": "agents",
+          "columnsFrom": [
+            "speaker_track_id"
           ],
           "columnsTo": [
             "id"
@@ -1505,6 +1694,130 @@
       "checkConstraints": {},
       "isRLSEnabled": true
     },
+    "agents.speaker_track": {
+      "name": "speaker_track",
+      "schema": "agents",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "meeting_id": {
+          "name": "meeting_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "discord_user_id": {
+          "name": "discord_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "r2_key": {
+          "name": "r2_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "duration_sec": {
+          "name": "duration_sec",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "byte_size": {
+          "name": "byte_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "transcription_state": {
+          "name": "transcription_state",
+          "type": "transcription_state",
+          "typeSchema": "agents",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "segments": {
+          "name": "segments",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "speaker_track_meeting_user_uq": {
+          "name": "speaker_track_meeting_user_uq",
+          "columns": [
+            {
+              "expression": "meeting_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "discord_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "speaker_track_meeting_id_meeting_id_fk": {
+          "name": "speaker_track_meeting_id_meeting_id_fk",
+          "tableFrom": "speaker_track",
+          "tableTo": "meeting",
+          "schemaTo": "agents",
+          "columnsFrom": [
+            "meeting_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
     "agents.suppression": {
       "name": "suppression",
       "schema": "agents",
@@ -1673,7 +1986,13 @@
           "name": "call_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
+        },
+        "meeting_id": {
+          "name": "meeting_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         },
         "turns": {
           "name": "turns",
@@ -1718,6 +2037,20 @@
           "schemaTo": "agents",
           "columnsFrom": [
             "call_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "transcript_meeting_id_meeting_id_fk": {
+          "name": "transcript_meeting_id_meeting_id_fk",
+          "tableFrom": "transcript",
+          "tableTo": "meeting",
+          "schemaTo": "agents",
+          "columnsFrom": [
+            "meeting_id"
           ],
           "columnsTo": [
             "id"
@@ -1828,6 +2161,16 @@
         "hcp_job",
         "pto",
         "window"
+      ]
+    },
+    "agents.transcription_state": {
+      "name": "transcription_state",
+      "schema": "agents",
+      "values": [
+        "pending",
+        "transcribing",
+        "transcribed",
+        "failed"
       ]
     }
   },
