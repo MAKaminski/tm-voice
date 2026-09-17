@@ -6,6 +6,12 @@ import { type Adapter, MockRecorder, useMock } from "../base.js";
 
 export interface R2Adapter extends Adapter {
   putObject(key: string, body: Uint8Array | string, contentType: string): Promise<{ key: string }>;
+  /**
+   * Read an object back into memory. Added for meeting transcription, which has to hand the bytes
+   * to an STT provider rather than a URL — not every provider fetches, and a presigned URL would
+   * put the recording on the public internet for the length of its TTL.
+   */
+  getObject(key: string): Promise<Uint8Array>;
   getSignedUrl(key: string, ttlSeconds: number): Promise<{ url: string; expires_at: string }>;
   deleteObject(key: string): Promise<void>;
 }
@@ -35,6 +41,12 @@ export function createR2Adapter(cfg: Config): R2Adapter & { mock?: MockRecorder;
       name: "r2", mode: "mock", mock, store,
       async healthcheck() { return { vendor: "r2", ok: true, mode: "mock" as const }; },
       async putObject(key, body) { mock.record("putObject", key); store.set(key, body); return { key }; },
+      async getObject(key) {
+        mock.record("getObject", key);
+        const v = store.get(key);
+        if (v === undefined) throw new AdapterError({ vendor: "r2", code: "http_404", retryable: false, raw: { key } });
+        return typeof v === "string" ? new TextEncoder().encode(v) : v;
+      },
       async getSignedUrl(key, ttl) {
         mock.record("getSignedUrl", key, ttl);
         return { url: `https://mock-r2.local/${key}?sig=mock`, expires_at: new Date(Date.now() + ttl * 1000).toISOString() };
@@ -68,6 +80,16 @@ export function createR2Adapter(cfg: Config): R2Adapter & { mock?: MockRecorder;
         await client.send(new PutObjectCommand({ Bucket, Key: key, Body: body, ContentType: contentType }));
         return { key };
       } catch (e) { wrap("r2", "putObject", e); }
+    },
+    async getObject(key) {
+      try {
+        const res = await client.send(new GetObjectCommand({ Bucket, Key: key }));
+        if (!res.Body) throw new AdapterError({ vendor: "r2", code: "empty_body", retryable: false, raw: { key } });
+        return new Uint8Array(await res.Body.transformToByteArray());
+      } catch (e) {
+        if (e instanceof AdapterError) throw e;
+        wrap("r2", "getObject", e);
+      }
     },
     async getSignedUrl(key, ttlSeconds) {
       if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0 || ttlSeconds > MAX_SIGNED_TTL_SEC) {

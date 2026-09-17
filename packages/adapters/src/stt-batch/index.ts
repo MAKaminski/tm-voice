@@ -30,7 +30,9 @@ export type Segment = z.infer<typeof segment>;
 export const transcribeFileInput = z.object({
   /** Opaque handle for logs and mock determinism — an R2 key in practice. */
   key: z.string().min(1),
-  audio: z.instanceof(Uint8Array),
+  // z.custom rather than z.instanceof: the latter infers Uint8Array<ArrayBuffer>, which rejects
+  // the plain Uint8Array every Node read path hands back.
+  audio: z.custom<Uint8Array>((v) => v instanceof Uint8Array, { message: "audio must be a Uint8Array" }),
   content_type: z.string().min(1),
   /** Seconds already elapsed in the meeting when this chunk starts; segments come back absolute. */
   offset_sec: z.number().nonnegative().default(0),

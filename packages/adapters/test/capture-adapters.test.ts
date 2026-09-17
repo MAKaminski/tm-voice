@@ -34,6 +34,14 @@ describe("discord adapter", () => {
 });
 
 describe("stt-batch adapter", () => {
+  it("round-trips a plain Node Uint8Array, not just a narrowed one", async () => {
+    // r2.getObject hands back a Uint8Array over an ArrayBufferLike; a z.instanceof schema would
+    // have rejected it at the type level and a Buffer at runtime.
+    const a = createSttBatchAdapter(dryRun);
+    await expect(a.transcribeFile({ key: "k", audio: new Uint8Array(Buffer.from("x")), content_type: "audio/ogg" })).resolves.toBeDefined();
+  });
+
+
   it("stays mock even in live mode with keys set, and says so", async () => {
     const a = createSttBatchAdapter(realConfig({ STT_BATCH_PROVIDER: "deepgram", STT_BATCH_API_KEY: "k" }));
     expect(a.mode).toBe("mock");
