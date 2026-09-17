@@ -2,7 +2,11 @@
 
 Autonomous outbound voice agent for Transparent Maintenance. Companions: `docs/ERD.md` (schema), `docs/COMPLIANCE.md` (pre-dial rules), `docs/RUNBOOK.md` (go-live sequence), `docs/CREDENTIALS.md` (where every credential comes from and how to rotate it).
 
-This document answers four questions, in order: **what is connected**, **in what way**, **what has to be true for it to run that way**, and **what changes when the dial mode flips**. Every diagram is drawn from the code as it stands on `main` (2026-09-13), not from the build plan. Where the two disagree, the diagram says so.
+For the whole system on one screen, open `docs/diagrams/tm-voice-architecture.html` — an
+interactive map whose node links are validated against real paths in this repository at the
+revision it pins. The text below is the authority; the diagram is the orientation.
+
+This document answers four questions, in order: **what is connected**, **in what way**, **what has to be true for it to run that way**, and **what changes when the dial mode flips**. Every diagram is drawn from the code as it stands on `main` (2026-09-17), not from the build plan. Where the two disagree, the diagram says so.
 
 How to read the diagrams:
 
