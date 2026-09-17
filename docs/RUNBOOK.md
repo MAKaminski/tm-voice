@@ -129,7 +129,14 @@ Discord explains why the in-channel notice alone is not the whole story.
 
 ### 2. TM-OS: one-time DDL, then the key
 
-`ops.tasks` lives in the Supabase project `afazwqebmluuyoowjxoo` — **not** tm-voice's own Postgres.
+`ops.tasks` lives in the Supabase project `uzvbzusomftegypxudbj` ("TM1") — the **same** project as
+tm-voice's own `agents` schema, reached a different way: `ops` over PostgREST, `agents` over Drizzle.
+Rule 4 still forbids reaching `ops` through Drizzle, so the adapter stays the only path.
+
+> Corrected 2026-09-17. This section previously named `afazwqebmluuyoowjxoo`, which is not a project
+> on this account. The error was latent — the adapter stays in mock mode until `TMOS_SERVICE_KEY` is
+> set — so nothing had failed yet, and would have failed on the first real write.
+
 Run this once in that project's SQL editor:
 
 ```sql
@@ -154,9 +161,9 @@ The `source` vocabulary, as it actually is (not prefixed — no row uses a `vc:`
 | `vc` | **New.** Captured from a Discord **voice** meeting; `external_key` is `vc:<session_id>:<n>` |
 
 Then Supabase → that project → Settings → API → **service_role** key → `TMOS_SERVICE_KEY`.
-`TMOS_SUPABASE_URL` is `https://afazwqebmluuyoowjxoo.supabase.co`. The service role bypasses RLS, so
-this key writes to every table in that project — keep it in 1Password and set it on the **worker
-only**. Capture never needs it.
+`TMOS_SUPABASE_URL` is `https://uzvbzusomftegypxudbj.supabase.co`. The service role bypasses RLS, so
+this key writes to every table in the project — **including the `agents` schema tm-voice owns** —
+so keep it in 1Password and set it on the **worker only**. Capture never needs it.
 
 Also worth checking while you are there: `POST /api/tasks` on the board answered an unauthenticated
 request during this work. If that endpoint is genuinely open on the public internet, anyone can file
@@ -243,6 +250,7 @@ in the Vapi dashboard does not work: the sync reverts the edit within a day and 
 | To change | Edit | Takes effect |
 |---|---|---|
 | What Joe says first | a **new** `script_version` row, then mark it active | next sync |
+| What Joe may say about the company | the **Licences** tab in TM-OS — licence numbers, crews, trades, routing contacts. Tick **Voice agent** on a row to let him state it; untick to silence it. Not a code change. | next sync |
 | How Joe sounds | `packages/adapters/src/vapi/voice.ts` | next sync |
 | How Joe behaves — turn-taking, email read-back, what he is trying to achieve | `packages/adapters/src/vapi/conversation.ts` | next sync |
 | Ambient noise, interruption handling, silence and call-length limits | `SPEECH_PLAN` in `conversation.ts` | next sync |

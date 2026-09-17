@@ -3,10 +3,14 @@ import { z } from "zod";
 import { type Adapter, MockRecorder, request, useMock, validate } from "../base.js";
 
 /**
- * TM-OS is the Transparent Maintenance board (tm-os-makaminski1337.vercel.app). Its tasks live in
- * `ops.tasks` in a DIFFERENT Supabase project from tm-voice's own Postgres — so it is reached over
- * PostgREST as a vendor, never through drizzle and never by adding it to packages/db. Two databases
- * in one drizzle schema would put the CRM inside the migration blast radius.
+ * TM-OS is the Transparent Maintenance board (tm-os-makaminski1337.vercel.app). Its tables live in
+ * the `ops` schema of the SAME Supabase project as tm-voice's own `agents` schema (uzvbzusomftegypxudbj,
+ * "TM1") — one database, two schemas, two owners. It is still reached over PostgREST as a vendor,
+ * never through drizzle and never by adding it to packages/db: one drizzle schema spanning both
+ * would put another team's board inside this repo's migration blast radius.
+ *
+ * (Corrected 2026-09-17. This comment and the env said a different project; that project does not
+ * exist on the account. Nothing had failed because the adapter is a mock until the key is set.)
  *
  * Idempotency is `external_key`, NOT `source`. `source` on that table is an existing low-cardinality
  * label ("manual", "process", "claude", "discord") shared by dozens of rows, so it cannot carry a
@@ -24,6 +28,22 @@ export const DEFAULT_ROLE = "Task Intake";
 export const STATUS_NEW = "inbox";
 
 export interface TmosRole { id: string; name: string; owner: string; active: boolean }
+
+/**
+ * What the voice agent is allowed to say about the company (TM-OS decision 0031). Two tables, one
+ * purpose: `ops.licences` are the numbers that expire, `ops.company_facts` the ones that do not.
+ *
+ * Only `sayable` rows are returned. The gate lives in TM-OS rather than here because it is a
+ * business decision — a licence number read to a prospect is a claim the company is making — and a
+ * person must be able to revoke it without a deploy.
+ */
+export interface TmosLicence {
+  kind: string; name: string; number: string; holder: string;
+  /** ISO date, or null for a registration number that does not expire. */
+  expires_on: string | null;
+}
+export interface TmosFact { key: string; label: string; value: string }
+export interface TmosCompanyFacts { licences: TmosLicence[]; facts: TmosFact[] }
 export interface TmosTask { id: string; title: string; status: string; owner: string; source: string | null; external_key: string | null }
 
 export const createTaskInput = z.object({
@@ -44,6 +64,8 @@ export interface TmosAdapter extends Adapter {
   listOpenTasks(): Promise<TmosTask[]>;
   /** Idempotent on external_key: a row that already exists is returned, never duplicated. */
   createTask(input: CreateTaskInput): Promise<{ id: string; created: boolean }>;
+  /** Sayable company facts for the assistant's system prompt. Expiry is filtered by the caller, not here. */
+  listCompanyFacts(): Promise<TmosCompanyFacts>;
 }
 
 /** Not yet finished: what the extractor must not file a second time. */
@@ -75,6 +97,10 @@ export function createTmosAdapter(cfg: Config): TmosAdapter & { mock?: MockRecor
         };
         tasks.set(v.external_key, row);
         return { id: row.id, created: true };
+      },
+      async listCompanyFacts() {
+        mock.record("listCompanyFacts");
+        return { licences: MOCK_LICENCES.map((l) => ({ ...l })), facts: MOCK_FACTS.map((f) => ({ ...f })) };
       },
     };
   }
@@ -123,8 +149,35 @@ export function createTmosAdapter(cfg: Config): TmosAdapter & { mock?: MockRecor
       if (!row?.id) throw new AdapterError({ vendor: "tmos", code: "missing_task_id", retryable: false, raw: rows });
       return { id: row.id, created: true };
     },
+    async listCompanyFacts() {
+      const [licences, facts] = await Promise.all([
+        request<TmosLicence[]>({
+          vendor: "tmos", url: `${base}/licences`, headers: headers(false),
+          query: { select: "kind,name,number,holder,expires_on", sayable: "is.true", order: "sort" },
+        }),
+        request<TmosFact[]>({
+          vendor: "tmos", url: `${base}/company_facts`, headers: headers(false),
+          query: { select: "key,label,value", sayable: "is.true", order: "sort" },
+        }),
+      ]);
+      return { licences, facts };
+    },
   };
 }
+
+/** Seeded sayable rows, mirroring the live board so a dry_run prompt has the shape a live one will. */
+export const MOCK_LICENCES: TmosLicence[] = [
+  { kind: "general_contractor", name: "Georgia general contractor — company", number: "RBCO007813", holder: "Transparent Maintenance", expires_on: "2030-06-30" },
+  { kind: "lead_safe_firm", name: "Georgia certified lead-based paint renovation firm", number: "GA-EPD-RRP FIRM-398659", holder: "Transparent Maintenance Inc.", expires_on: "2026-12-14" },
+  { kind: "lead_safe_renovator", name: "Georgia certified renovator", number: "GA-EPD-RRP-8813-5041", holder: "Joseph McGrew", expires_on: "2027-02-23" },
+  { kind: "registration", name: "Georgia Secretary of State control number", number: "22027249", holder: "Transparent Maintenance", expires_on: null },
+];
+export const MOCK_FACTS: TmosFact[] = [
+  { key: "address", label: "Business address", value: "180 East Knight Rd, McDonough, GA 30252" },
+  { key: "capacity", label: "Crews", value: "Maintenance: 2 technicians. Turns: 2 crews. Renovations: 2 crews." },
+  { key: "subcontracted", label: "Subcontracted trades", value: "Plumbing, electrical, HVAC, roofing, framing, painting, concrete, drywall, siding replacement." },
+  { key: "work_orders", label: "Work orders", value: "wo@transparentmaintenance.com" },
+];
 
 /** The roles seeded on the live board, as of 2026-09-17. Used by the mock and by role resolution. */
 export const MOCK_ROLES: TmosRole[] = [

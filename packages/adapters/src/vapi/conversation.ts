@@ -113,11 +113,82 @@ Never read an email address back as a single word. Never read one back faster th
 
 Do not offer the onboarding packet, a walkthrough, a quote, or an appointment unless the caller asks for it first. If they do ask, answer briefly and then get back to confirming the contact details.`;
 
+/**
+ * What Joe may state about the company, and when.
+ *
+ * The agent shipped with no facts at all. Its own rule is to say it does not know what it does not
+ * know, so on a vendor-intake call it answered "I don't know" to every qualifying question — are you
+ * licensed, are you lead-safe certified, what do you self-perform, where do work orders go — and the
+ * call ended before it could ask for the one thing it exists to collect. Fixing the objective (item 7)
+ * without this only narrowed the goal; it did not let the agent reach it.
+ *
+ * The rows come from TM-OS (decision 0031), not from this file, because a person must be able to
+ * revoke or correct a claim without a deploy. Only rows a person marked `sayable` arrive here at all.
+ */
+export const factsSchema = z.object({
+  licences: z.array(z.object({
+    kind: z.string(), name: z.string(), number: z.string(), holder: z.string(),
+    expires_on: z.string().nullable(),
+  })),
+  facts: z.array(z.object({ key: z.string(), label: z.string(), value: z.string() })),
+});
+export type Facts = z.infer<typeof factsSchema>;
+
+/** ISO date already past at `now`. A null expiry is a registration number: it never lapses. */
+function expired(expires_on: string | null, now: Date): boolean {
+  if (!expires_on) return false;
+  return Date.parse(`${expires_on}T23:59:59Z`) < now.getTime();
+}
+
+/**
+ * Renders the sayable facts, dropping any licence that has lapsed.
+ *
+ * This filter is the most important line here. A certificate is a claim about the present tense: the
+ * lead-safe firm certificate expires 2026-12-14, and an agent still telling a property manager the
+ * company is a certified renovation firm on 2026-12-15 is making a false statement to someone who
+ * may rely on it. TM-OS files a renewal card 30 days out; if that card is missed, the agent must go
+ * quiet on the claim rather than carry it forward.
+ *
+ * Nothing here claims insurance. Licences and insurance are different things, and the company's auto
+ * liability certificate is expired — so "we are licensed" must never be rendered as "we are covered".
+ */
+export function renderFacts(input: Facts, now: Date): string {
+  const { licences, facts } = factsSchema.parse(input);
+  const live = licences.filter((l) => !expired(l.expires_on, now));
+  const lines: string[] = [
+    "## What you may state about the company",
+    "",
+    "These are the only company facts you may give out. If you are asked something that is not here, say you do not know and that someone from the office can answer it. Never guess a number, a date or an address.",
+    "",
+  ];
+  if (facts.length) {
+    for (const f of facts) lines.push(`- ${f.label}: ${f.value}`);
+    lines.push("");
+  }
+  if (live.length) {
+    lines.push("Licences and certifications, current as of this call:");
+    // A holder that already ends in a full stop ("Transparent Maintenance Inc.") must not get a
+    // second one: this string is read aloud, and the TTS engine does not silently swallow "..".
+    for (const l of live) lines.push(`- ${l.name}, number ${l.number}, held by ${l.holder.replace(/\.$/, "")}.`);
+    lines.push("");
+  }
+  lines.push(
+    "Say a licence number only if you are asked whether the company is licensed or certified. Read it back the way you read an email address: slowly, character by character, never as one word.",
+    "",
+    "Do not say the company is insured, and do not describe its insurance. Being licensed and being insured are different things and you only know about the licences above. If you are asked about insurance, certificates of insurance or being bonded, say someone from the office will send the certificate.",
+  );
+  return lines.join("\n");
+}
+
 export const buildSystemPromptSchema = z.object({
   /** SCRIPT_VERSION.disclosure_line, verbatim. Rule 10: it is the first utterance, not a summary. */
   disclosureLine: z.string().min(1),
   /** SCRIPT_VERSION.body — the campaign's own framing, which varies per script version. */
   scriptBody: z.string().min(1),
+  /** Sayable company facts from TM-OS. Required: an agent with no facts cannot clear a vendor-intake call. */
+  facts: factsSchema,
+  /** Evaluated against each licence's expiry, so a lapsed certificate is never stated. */
+  now: z.date(),
 });
 
 /**
@@ -125,7 +196,7 @@ export const buildSystemPromptSchema = z.object({
  * change in the database still flows through and the conversation rules cannot be edited away.
  */
 export function buildSystemPrompt(input: z.infer<typeof buildSystemPromptSchema>): string {
-  const { disclosureLine, scriptBody } = buildSystemPromptSchema.parse(input);
+  const { disclosureLine, scriptBody, facts, now } = buildSystemPromptSchema.parse(input);
   return [
     "You are Joe, an automated assistant calling on behalf of Transparent Maintenance, a property maintenance company in Atlanta.",
     "",
@@ -134,6 +205,8 @@ export function buildSystemPrompt(input: z.infer<typeof buildSystemPromptSchema>
     OBJECTIVE,
     "",
     `Campaign context: ${scriptBody}`,
+    "",
+    renderFacts(facts, now),
     "",
     CONVERSATION_RULES,
     "",
