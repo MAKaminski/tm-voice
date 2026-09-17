@@ -43,6 +43,13 @@
       "when": 1789390070215,
       "tag": "0005_great_terrax",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789670551182,
+      "tag": "0006_pale_true_believers",
+      "breakpoints": true
     }
   ]
 }

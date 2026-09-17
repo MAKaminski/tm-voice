@@ -113,7 +113,7 @@ export const postcallProcess: Processor<PostcallPayload> = async (ctx, p) => {
   const startedAt = p.started_at ? new Date(p.started_at) : c.startedAt;
   await ctx.db.transaction(async (tx) => {
     await tx.update(call).set({
-      disposition, endedAt,
+      disposition, endedAt, disclosureOk,
       durationSec: Math.max(0, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000)),
       costUsd: (p.cost_usd ?? 0).toFixed(4), updatedAt: new Date(),
     }).where(eq(call.id, c.id));
@@ -157,6 +157,25 @@ export const postcallProcess: Processor<PostcallPayload> = async (ctx, p) => {
     // recording url means either the assistant has recording switched off — which the sync should
     // have corrected — or Vapi dropped it. Worth a line either way.
     logger.warn({ call_id: c.id, vapi_call_id: p.vapi_call_id }, "end-of-call report carried no recording url");
+  }
+
+  /**
+   * Tell the CRM the call happened. A job, not an inline call: Apollo offers no idempotency header,
+   * so the envelope's key is the only thing standing between a webhook retry and a duplicate
+   * activity on the contact.
+   */
+  await ctx.producer.enqueue("apollo", "logCall", {
+    entity_id: c.id,
+    idempotency_key: idempotencyKey("apollo", "logCall", p.vapi_call_id),
+    attempt: 0,
+    enqueued_at: new Date().toISOString(),
+    vapi_call_id: p.vapi_call_id,
+  });
+
+  if (disclosureOk === false) {
+    // Already logged at error level above; repeated here at the end of the run so the one line a
+    // reader greps for carries the call id and the disposition together.
+    logger.error({ call_id: c.id, disposition }, "rule 10 exception: the disclosure line was not spoken verbatim on this call");
   }
 
   logger.info({ call_id: c.id, disposition, ended_reason: p.ended_reason, customer_turns: customerTurns, disclosure_ok: disclosureOk }, "post-call processed");

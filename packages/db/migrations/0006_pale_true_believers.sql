@@ -1,0 +1,1 @@
+ALTER TABLE "agents"."call" ADD COLUMN "disclosure_ok" boolean;

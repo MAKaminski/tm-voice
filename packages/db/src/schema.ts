@@ -147,6 +147,15 @@ export const call = agents.table("call", {
   vapiCallId: text("vapi_call_id"),
   telnyxCallControlId: text("telnyx_call_control_id"),
   costUsd: numeric("cost_usd", { precision: 8, scale: 4 }).notNull().default("0"),
+  /**
+   * Whether the fixed disclosure line was spoken verbatim as the first utterance (rule 10).
+   * NULL means not assessed — no transcript, or no script version to compare against.
+   *
+   * Persisted rather than only logged because it is the one field here with legal exposure: a
+   * campaign could breach rule 10 on every dial for a day and, while this was a log line, the only
+   * trace would have been in a log retention window. Now it is queryable after the fact.
+   */
+  disclosureOk: boolean("disclosure_ok"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }).enableRLS();
