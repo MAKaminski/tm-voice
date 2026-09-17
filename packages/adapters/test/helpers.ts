@@ -4,13 +4,19 @@ import { vi } from "vitest";
 const base = { DATABASE_URL: "postgres://x", INTERNAL_API_TOKEN: "0123456789abcdef0123" };
 
 /** Every vendor key, set to a placeholder. Outside dry_run the config loader requires all of them. */
-export const allKeys = Object.fromEntries([
+const allKeysRaw = Object.fromEntries([
   "APOLLO_API_KEY", "HCP_API_KEY", "TELNYX_API_KEY", "TELNYX_CONNECTION_ID", "TELNYX_PUBLIC_KEY", "VAPI_PRIVATE_KEY",
   "VAPI_WEBHOOK_SECRET", "VAPI_ASSISTANT_ID", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID",
   "LLM_PROVIDER", "LLM_API_KEY", "LLM_MODEL", "RESEND_API_KEY", "MAIL_FROM", "MS_TENANT_ID", "MS_CLIENT_ID",
   "MS_CLIENT_CERT_PEM", "MS_BOOKING_MAILBOX", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
   "R2_BUCKET", "DNC_API_KEY",
+  "DISCORD_BOT_TOKEN", "WATCH_CHANNEL_IDS", "STT_BATCH_PROVIDER", "STT_BATCH_API_KEY",
+  "TMOS_SUPABASE_URL", "TMOS_SERVICE_KEY", "TMOS_BOARD_URL",
+  // LLM_PROVIDER is overridden below: the llm adapter refuses to construct for a provider whose
+  // wire format it does not speak, so a placeholder "x" would throw before any test runs.
 ].map((k) => [k, "x"]));
+Object.assign(allKeysRaw, { LLM_PROVIDER: "anthropic" });
+export const allKeys = allKeysRaw;
 
 /** A config whose adapters are all in real mode. `over` replaces individual keys. */
 export function realConfig(over: Record<string, string> = {}) {

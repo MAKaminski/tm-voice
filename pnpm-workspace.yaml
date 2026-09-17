@@ -15,3 +15,8 @@ allowBuilds:
   sharp: true
   bufferutil: true
   utf-8-validate: true
+  # @discordjs/voice pulls in prism-media, which declares @discordjs/opus as an optional peer.
+  # capture never decodes or plays audio — Opus packets are framed into Ogg exactly as they
+  # arrive (apps/capture/src/ogg.ts) and re-encoded once by ffmpeg — so the native build is
+  # declined here rather than left as an ignored-build warning that fails install in CI.
+  '@discordjs/opus': false

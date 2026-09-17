@@ -28,6 +28,12 @@ export const disposition = agents.enum("disposition", [
 export const consentEventType = agents.enum("consent_event_type", ["grant", "revoke"]);
 export const bookingStatus = agents.enum("booking_status", ["pending_review", "approved", "rejected", "synced", "failed"]);
 export const scheduleBlockSource = agents.enum("schedule_block_source", ["hcp_job", "pto", "window"]);
+/**
+ * Per-row transcription state. It lives on speaker_track as well as meeting so that a crash
+ * part-way through a multi-speaker transcode resumes on the tracks still pending, rather than
+ * re-transcribing (and re-filing) the ones already done.
+ */
+export const transcriptionState = agents.enum("transcription_state", ["pending", "transcribing", "transcribed", "failed"]);
 
 export const account = agents.table("account", {
   id: id(),
@@ -173,9 +179,61 @@ export const call = agents.table("call", {
   updatedAt: updatedAt(),
 }).enableRLS();
 
+/**
+ * A Discord voice meeting captured by apps/capture. Unrelated to the dial path: a meeting has no
+ * call_task and no PSTN leg. `session_id` is minted by the capture service on join and is the
+ * idempotency anchor for the whole downstream pipeline.
+ */
+export const meeting = agents.table(
+  "meeting",
+  {
+    id: id(),
+    discordGuildId: text("discord_guild_id").notNull(),
+    discordChannelId: text("discord_channel_id").notNull(),
+    sessionId: text("session_id").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    participantCount: integer("participant_count").notNull().default(0),
+    transcriptionState: transcriptionState("transcription_state").notNull().default("pending"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("meeting_session_uq").on(t.sessionId),
+    index("meeting_channel_idx").on(t.discordChannelId, t.startedAt),
+  ],
+).enableRLS();
+
+/** One row per participant stream. Opus is received per-SSRC, so each speaker is a separate track. */
+export const speakerTrack = agents.table(
+  "speaker_track",
+  {
+    id: id(),
+    meetingId: uuid("meeting_id").notNull().references(() => meeting.id),
+    discordUserId: text("discord_user_id").notNull(),
+    displayName: text("display_name"),
+    r2Key: text("r2_key").notNull(),
+    durationSec: integer("duration_sec").notNull().default(0),
+    byteSize: integer("byte_size").notNull().default(0),
+    transcriptionState: transcriptionState("transcription_state").notNull().default("pending"),
+    /** stt-batch output: [{ start_sec, end_sec, text }]. Empty until the track is transcribed. */
+    segments: jsonb("segments").notNull().default([]),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("speaker_track_meeting_user_uq").on(t.meetingId, t.discordUserId)],
+).enableRLS();
+
+/**
+ * Exactly one parent: a `call` (dial path) or a `speaker_track` (Discord capture). Enforced by
+ * CHECK recording_one_parent in migrations/0007_meeting_parents.sql, not by drizzle.
+ * `retain_until` keeps its 5-year floor for both, so meeting audio is swept on the same clock.
+ */
 export const recording = agents.table("recording", {
   id: id(),
-  callId: uuid("call_id").notNull().references(() => call.id),
+  callId: uuid("call_id").references(() => call.id),
+  meetingId: uuid("meeting_id").references(() => meeting.id),
+  speakerTrackId: uuid("speaker_track_id").references(() => speakerTrack.id),
   r2Key: text("r2_key").notNull(),
   signedUrl: text("signed_url"),
   signedUrlExpiresAt: timestamp("signed_url_expires_at", { withTimezone: true }),
@@ -184,9 +242,11 @@ export const recording = agents.table("recording", {
   updatedAt: updatedAt(),
 }).enableRLS();
 
+/** Exactly one parent: a `call` or a `meeting` (CHECK transcript_one_parent, migration 0007). */
 export const transcript = agents.table("transcript", {
   id: id(),
-  callId: uuid("call_id").notNull().references(() => call.id),
+  callId: uuid("call_id").references(() => call.id),
+  meetingId: uuid("meeting_id").references(() => meeting.id),
   turns: jsonb("turns").notNull().default([]),
   summary: text("summary"),
   /** Vapi call analysis (structuredDataPlan): the fields the assistant captured, e.g. contact_email, packet_type, outcome. */
@@ -195,13 +255,18 @@ export const transcript = agents.table("transcript", {
   updatedAt: updatedAt(),
 }).enableRLS();
 
-/** Append-only: a DB trigger (migrations/0001_consent_immutable.sql) rejects UPDATE and DELETE. */
+/**
+ * Append-only: a DB trigger (migrations/0001_consent_immutable.sql) rejects UPDATE and DELETE.
+ * Exactly one subject: contact_id (phone) or meeting_id (Discord) — CHECK consent_event_one_subject.
+ */
 export const consentEvent = agents.table(
   "consent_event",
   {
     id: id(),
-    contactId: uuid("contact_id").notNull().references(() => contact.id),
+    contactId: uuid("contact_id").references(() => contact.id),
     callId: uuid("call_id").references(() => call.id),
+    /** Set instead of contact_id when the notice was given in a Discord channel, not on a call. */
+    meetingId: uuid("meeting_id").references(() => meeting.id),
     eventType: consentEventType("event_type").notNull(),
     channel: text("channel").notNull(),
     captureArtifact: jsonb("capture_artifact").notNull().default({}),
@@ -298,6 +363,7 @@ export const emailSend = agents.table(
 ).enableRLS();
 
 export const schema = {
-  account, contact, serviceAddress, scriptVersion, campaign, callTask, did, call, recording, transcript,
-  consentEvent, suppression, technician, scheduleBlock, booking, calendarInvite, emailSend,
+  account, contact, serviceAddress, scriptVersion, campaign, callTask, did, call, meeting, speakerTrack,
+  recording, transcript, consentEvent, suppression, technician, scheduleBlock, booking, calendarInvite,
+  emailSend,
 };

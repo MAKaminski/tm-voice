@@ -7,6 +7,23 @@ afterEach(() => vi.unstubAllGlobals());
 const cfg = () => realConfig({ R2_ACCOUNT_ID: "acct123", R2_ACCESS_KEY_ID: "AKIAX", R2_SECRET_ACCESS_KEY: "secret", R2_BUCKET: "tm-call-recordings" });
 
 describe("r2 real adapter", () => {
+  it("reads an object back as bytes, for a transcriber that wants the audio not a URL", async () => {
+    const calls = stubFetch(() => ({ status: 200, text: "opus-bytes" }));
+    const r = createR2Adapter(cfg());
+    const body = await r.getObject("meetings/g/c/1/u1.opus");
+    expect(Buffer.from(body).toString()).toBe("opus-bytes");
+    const got = new URL(calls[0]!.url);
+    expect(calls[0]!.method).toBe("GET");
+    expect(got.origin + got.pathname).toBe("https://tm-call-recordings.acct123.r2.cloudflarestorage.com/meetings/g/c/1/u1.opus");
+  });
+
+  it("reports a missing object as a non-retryable 404 rather than empty audio", async () => {
+    stubFetch(() => ({ status: 404, text: "" }));
+    const r = createR2Adapter(cfg());
+    await expect(r.getObject("meetings/gone.opus")).rejects.toMatchObject({ vendor: "r2", code: "http_404", retryable: false });
+  });
+
+
   it("targets the account's R2 endpoint and bucket with a signed PUT", async () => {
     const calls = stubFetch(() => ({ status: 200, text: "" }));
     const r = createR2Adapter(cfg());

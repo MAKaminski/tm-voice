@@ -49,6 +49,13 @@ export const VENDOR_KEYS = [
   "R2_SECRET_ACCESS_KEY",
   "R2_BUCKET",
   "DNC_API_KEY",
+  "DISCORD_BOT_TOKEN",
+  "WATCH_CHANNEL_IDS",
+  "STT_BATCH_PROVIDER",
+  "STT_BATCH_API_KEY",
+  "TMOS_SUPABASE_URL",
+  "TMOS_SERVICE_KEY",
+  "TMOS_BOARD_URL",
 ] as const;
 export type VendorKey = (typeof VENDOR_KEYS)[number];
 
@@ -63,6 +70,8 @@ export type VendorKey = (typeof VENDOR_KEYS)[number];
  *
  * Deepgram, ElevenLabs and the LLM are absent because nothing on the dial path calls them: those
  * keys are pasted into Vapi's own Provider Keys, so demanding them locally gated nothing.
+ * The Discord capture keys are absent for the same reason and one more: capture runs on Fly.io,
+ * not Railway, so demanding them here would stop the dialer booting over a meeting recorder.
  * `ELEVENLABS_VOICE_ID` is read by `vapi.syncAssistant`, but that job runs on its own schedule —
  * requiring it here would block dialling on a voice sync that has nothing to do with placing a call.
  */

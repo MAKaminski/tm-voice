@@ -70,6 +70,69 @@ Vapi dashboard: the sync reverts it within a day and the revert is logged.
 - Truthful answers to "am I talking to a robot?" are hard-coded in the assistant prompt (Phase 4).
 - Never enroll voiceprints (BIPA / CUBI).
 
+## Discord meeting capture (added 2026-09-17)
+
+A second recording surface, and a different legal footing from the dial path: these are internal
+meetings among people who work together, not calls to strangers, so the TCPA and the DNC registry do
+not apply. What does apply is recording consent, and it is handled in code, not by convention.
+
+### The notice
+
+Posted by the bot into the channel it is about to record, **before** the voice connection is opened.
+If the post fails, the join fails and nothing is retained — that is what makes it a precondition
+rather than a courtesy. Fixed text, in `apps/capture/src/notice.ts`:
+
+> Recording started. This voice channel is being recorded and transcribed by the Transparent
+> Maintenance meeting bot, and commitments made here are filed as tasks on the TM-OS board. Leave
+> the channel to stop being recorded. Details are pinned in this channel.
+
+### The pinned message (Michael's, not the code's)
+
+Every watched channel must carry a **pinned message** saying it is recorded. The in-channel notice
+tells the room what is happening right now; the pin is what someone joining mid-meeting, or reading
+back later, can find. Georgia is one-party consent, but the bot is not a party to the conversation
+and the audio goes to durable storage and a third-party transcriber, so the notice is given
+unconditionally rather than depending on where anyone is sitting. If a participant is ever in a
+two-party state (CA, FL, IL, MA, PA, WA), the notice plus the pin is what the consent rests on.
+
+### The CONSENT_EVENT
+
+Written in the same transaction as the `meeting` row, at join:
+
+| Column | Value |
+|---|---|
+| `event_type` | `grant` |
+| `channel` | `discord` |
+| `meeting_id` | the meeting (`contact_id` is null — a Discord participant is not a contact) |
+| `occurred_at` | the moment the bot joined |
+| `capture_artifact` | the notice text **verbatim**, the id of the message that carried it, the guild/channel/session ids, and the member ids present to read it |
+
+Storing the notice verbatim rather than a version number is deliberate: if the wording ever changes,
+what a given room was actually told is still recoverable. The table remains append-only — the
+immutability trigger from migration `0001` is untouched (rule 4).
+
+### Boundary
+
+`WATCH_CHANNEL_IDS` plus channel-level Connect, and nothing else. The bot never records server-wide;
+an empty `WATCH_CHANNEL_IDS` records **nothing** rather than everything, and the adapter refuses to
+post into a channel that is not on the list. It holds no privileged intents and never reads message
+history. Leaving the channel stops the recording, and when the last non-bot member leaves the
+meeting is finalised.
+
+### Retention
+
+Meeting audio is `recording` rows like any other, so `recording_retain_5y` applies and the same
+`retention.sweep` job deletes them on the same 5-year clock as call recordings. That is longer than
+an internal meeting needs, and it is the conservative direction; narrowing it would mean carving an
+exception into a constraint that currently has none.
+
+### Still open
+
+- Voiceprints are never enrolled, here as anywhere (BIPA / CUBI). Speaker attribution comes from
+  Discord's own per-user streams, not from recognising anyone's voice.
+- No batch STT provider has been chosen, so no meeting audio has left this system yet. When one is
+  picked, its data-retention and training terms are a compliance decision, not just a cost one.
+
 ## Retention (5 years)
 
 `recording.retain_until ≥ created_at + 5 years` is a DB check constraint. The retention sweeper deletes only rows past `retain_until`. Keep: timestamp, number, line type, consent record relied on, verbatim disclosure, recording, transcript, revocation events — all present in the ERD.

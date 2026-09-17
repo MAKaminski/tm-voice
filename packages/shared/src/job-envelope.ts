@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-export const QUEUES = ["dial", "postcall", "hcp", "graph", "resend", "apollo", "availability", "retention", "vapi"] as const;
+// "meeting" is the Discord capture path: apps/capture (Fly.io) enqueues, apps/worker consumes.
+export const QUEUES = ["dial", "postcall", "hcp", "graph", "resend", "apollo", "availability", "retention", "vapi", "meeting"] as const;
 export type QueueName = (typeof QUEUES)[number];
 export const DLQ_NAME = "dead";
 

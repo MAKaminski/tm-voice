@@ -1,4 +1,7 @@
-export type Vendor = "apollo" | "hcp" | "graph" | "resend" | "telnyx" | "vapi" | "r2" | "dnc";
+export type Vendor =
+  | "apollo" | "hcp" | "graph" | "resend" | "telnyx" | "vapi" | "r2" | "dnc"
+  // Discord capture path (apps/capture -> meeting.postcall -> ops.tasks).
+  | "discord" | "stt_batch" | "tmos" | "llm";
 
 export interface AdapterErrorShape {
   vendor: Vendor;

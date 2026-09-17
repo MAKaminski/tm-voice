@@ -30,7 +30,7 @@ describe("api", () => {
     expect(res.status).toBe(200);
     expect(j.dial_mode).toBe("dry_run");
     expect(j.dnc_scrub).toBe("required");
-    expect(j.vendors).toHaveLength(8);
+    expect(j.vendors).toHaveLength(12);
     expect(j.vendors.every((v: { mode: string }) => v.mode === "mock")).toBe(true);
   });
   it("GET /availability requires the internal token", async () => {
