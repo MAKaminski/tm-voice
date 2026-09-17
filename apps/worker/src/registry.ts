@@ -23,6 +23,8 @@ export const REGISTRY: Record<QueueName, Record<string, AnyProcessor>> = {
   availability: { materialize: p(availabilityMaterialize), invalidate: p(availabilityInvalidate) },
   retention: { sweep: p(retentionSweep) },
   vapi: { syncAssistant: p(vapiSyncAssistant) },
+  // Discord capture. Wired in M2; apps/capture already enqueues here.
+  meeting: { postcall: p(stub("meeting", 5)) },
 };
 
 /** Repeatable schedules registered at boot. */

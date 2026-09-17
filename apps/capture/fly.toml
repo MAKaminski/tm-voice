@@ -1,0 +1,41 @@
+# The Discord meeting recorder. This is the one tm-voice service that does not run on Railway:
+# Discord voice media is Opus over UDP with no TCP fallback, and Railway does not carry it.
+app = "tm-voice-capture"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  NODE_ENV = "production"
+
+# There is deliberately NO udp service block here. A Fly service exposes an INBOUND port and needs
+# a dedicated IPv4; Discord voice is outbound-initiated — the bot opens the UDP socket, performs IP
+# discovery and receives on the return path — so plain egress plus the NAT return is all it needs.
+# Adding an inbound UDP service would cost an address and serve nothing.
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false   # a stopped machine misses the meeting
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.checks]
+    [http_service.checks.health]
+      path = "/health"
+      interval = "30s"
+      timeout = "5s"
+      grace_period = "20s"
+
+[[vm]]
+  # Capture holds each speaker's packets in memory until the meeting ends and shells out to ffmpeg
+  # once per track at the end. An hour-long four-person meeting is well under 100 MB of Opus, but
+  # the ffmpeg pass wants headroom.
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+[deploy]
+  # Never roll a machine while it is recording: the replacement cannot inherit the voice connection
+  # and the meeting in flight would be lost. SIGTERM handling finalises what it can.
+  strategy = "immediate"
