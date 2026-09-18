@@ -10,7 +10,7 @@ import { ToolIdempotency } from "./tool-idempotency.js";
 import { availabilityRoutes } from "./routes/availability.js";
 import { bookingRoutes } from "./routes/bookings.js";
 import { healthRoutes } from "./routes/health.js";
-import { testCallRoutes } from "./routes/test-calls.js";
+import { callRoutes } from "./routes/calls.js";
 import { toolRoutes } from "./routes/tools.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 
@@ -34,7 +34,7 @@ export function createApp(deps: AppDeps) {
   app.route("/availability", availabilityRoutes());
   app.route("/", bookingRoutes());
   app.route("/tools", toolRoutes());
-  app.route("/", testCallRoutes());
+  app.route("/", callRoutes());
   app.route("/webhooks", webhookRoutes());
   app.notFound((c) => c.json({ error: "not_found" }, 404));
   app.onError((err, c) => { console.error(err); return c.json({ error: "internal", message: err.message }, 500); });

@@ -101,6 +101,56 @@ describe("POST /test-calls", () => {
   });
 });
 
+describe("POST /outbound-calls", () => {
+  const prospect = { phone: "+14045550160", requested_by: "Michael Kaminski", account_name: "Peachtree PM" };
+  const call = (body: unknown) => app.request("/outbound-calls", { method: "POST", headers: auth, body: JSON.stringify(body) });
+
+  it("refuses without the internal token", async () => {
+    const res = await app.request("/outbound-calls", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(prospect) });
+    expect(res.status).toBe(401);
+  });
+
+  it("refuses a number that is not E.164, and a missing requester", async () => {
+    expect((await call({ ...prospect, phone: "4045550160" })).status).toBe(400);
+    expect((await call({ phone: prospect.phone })).status).toBe(400);
+  });
+
+  /**
+   * The point of this route. A prospect has given no permission, so writing a grant would
+   * manufacture the evidence the gate exists to check. The number is queued with no consent and the
+   * gate decides — a mobile is then refused as 'surface', which is correct, not a bug.
+   */
+  it("writes no consent event at all", async () => {
+    const before = enqueued.length;
+    expect((await call(prospect)).status).toBe(202);
+
+    const [ct] = await t.db.select().from(contact).where(eq(contact.phoneE164, prospect.phone));
+    expect(ct).toBeDefined();
+    expect(await t.db.select().from(consentEvent).where(eq(consentEvent.contactId, ct!.id))).toHaveLength(0);
+    expect(enqueued.slice(before)).toEqual([{ queue: "dial", name: "claim" }]);
+  });
+
+  it("files prospects under their own campaign, never the test one", async () => {
+    const [ct] = await t.db.select().from(contact).where(eq(contact.phoneE164, prospect.phone));
+    const [task] = await t.db.select().from(callTask).where(eq(callTask.contactId, ct!.id));
+    const [camp] = await t.db.select().from(campaign).where(eq(campaign.id, task!.campaignId));
+    expect(camp!.name).toBe("Pipeline calls");
+    expect(camp!.status).toBe("active");
+  });
+
+  it("names the contact after the account, so the call log is readable", async () => {
+    const [ct] = await t.db.select().from(contact).where(eq(contact.phoneE164, prospect.phone));
+    expect(ct!.firstName).toBe("Peachtree PM");
+  });
+
+  it("says it is queued rather than dialled, because the gate has not run yet", async () => {
+    const res = await call({ ...prospect, phone: "+14045550161" });
+    const j = (await res.json()) as { note: string; call_task_id: string };
+    expect(res.status).toBe(202);
+    expect(j.note).toMatch(/queued, not dialled/);
+  });
+});
+
 describe("GET /calls and /call-tasks", () => {
   it("both require the internal token", async () => {
     expect((await app.request("/calls")).status).toBe(401);
