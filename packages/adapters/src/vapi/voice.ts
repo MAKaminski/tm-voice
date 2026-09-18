@@ -80,6 +80,14 @@ export const vapiVoiceSchema = z
  * Flash is chosen for latency (docs/RUNBOOK.md prices the call on it). It is V2-class, so it
  * honours `style`. If calls start feeling laggy, take style down before touching the model.
  *
+ * `model` is not a free knob when `ELEVENLABS_VOICE_ID` names a Professional Voice Clone. A PVC is
+ * fine-tuned per model, so this value selects a fine-tune that may not exist yet: ElevenLabs then
+ * refuses to render and Vapi ends the call with
+ * `pipeline-error-eleven-labs-voice-not-fine-tuned-and-cannot-be-used`. Nothing here can see that —
+ * the profile is valid, the PATCH succeeds, CI passes, and the failure appears only as an
+ * `ended_reason` on a live call. Before changing `model`, check the voice has that model's
+ * fine-tune in the ElevenLabs dashboard (docs/RUNBOOK.md § 7b).
+ *
  * Deliberately a plain literal rather than a `schema.parse(...)` at module load: parsing here would
  * turn a bad edit into an import-time stack trace in every CI job at once. `pnpm voice:check` and
  * the adapter's own `validate()` on each PATCH are the gates, and both report which knob is wrong.
