@@ -1,22 +1,10 @@
-import { call, recording } from "@tm/db";
+import { call, recording, retainUntil } from "@tm/db";
 import { logger } from "@tm/shared";
 import { eq } from "drizzle-orm";
 import type { Processor } from "../context.js";
 
 /** What postcall.process enqueues once it knows a recording exists. */
 export type RecordingPayload = { vapi_call_id: string; recording_url: string };
-
-/**
- * Five years exactly. The DB CHECK `recording_retain_5y` refuses anything shorter, and
- * docs/COMPLIANCE.md commits to keeping the recording, the transcript and the consent record for
- * that long. Deliberately not "five years plus a margin": the sweeper deletes strictly after
- * `retain_until`, so the margin would be dead storage rather than safety.
- */
-export function retainUntil(from: Date): string {
-  const d = new Date(from);
-  d.setUTCFullYear(d.getUTCFullYear() + 5);
-  return d.toISOString().slice(0, 10);
-}
 
 /** `calls/<yyyy>/<mm>/<call_id>.<ext>` — one prefix per month, so a retention sweep is one listing. */
 export function recordingKey(callId: string, startedAt: Date, contentType: string): string {
