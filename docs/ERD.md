@@ -126,6 +126,7 @@ call_task
   status  call_task_status  [NOT NULL]
   gate_result  gate_result
   claimed_at  timestamp with time zone
+  assistant_id  text
   created_at  timestamp with time zone  [NOT NULL]
   updated_at  timestamp with time zone  [NOT NULL]
 did

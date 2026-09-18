@@ -241,6 +241,32 @@ report it.
 
 Blended assumption $0.095/min → $0.063/dial at 5,000 dials/mo; $1/call line at ~2,000 dials/mo. `call.cost_usd` is populated in Phase 5 from vendor usage so this table can be replaced with measurements.
 
+## 7a2. Placing a test call
+
+The console's **Calls** tab (`/calls`) places one, and shows every call the system has made.
+
+It is deliberately not a shortcut past the dialer. The form creates the rows the dialer already
+expects — contact, consent, an active `Console test calls` campaign, a queued `call_task` — and then
+enqueues the same `dial.claim` job the campaign runner enqueues. `gateAndClaim` still runs and
+`DIAL_MODE` is still enforced in the adapter, so a test call exercises the system rather than a
+bypass of it. A number the gate refuses never becomes a call; it appears under **Blocked before
+dialling** with its `gate_result`, which is why that table exists.
+
+Three things it needs, and each is a real precondition rather than a form field:
+
+| Field | Why |
+|---|---|
+| Phone, in E.164 | Validated strictly, never coerced. Outside `dry_run` this dials a real phone, and a silently-fixed digit is a call to a stranger. |
+| Assistant id | Blank uses `VAPI_ASSISTANT_ID` — Joe, the only assistant this repo syncs. Set it to target another; it is stored on `call_task.assistant_id` and wins for that call only. |
+| Attestation + your name | `COMPLIANCE_TARGET_SURFACE=consented_mobile` means a mobile is only dialable with a grant in `CONSENT_EVENT`, which is append-only evidence. Ticking the box writes that grant, recorded as a console attestation with your name and the time. It is written once per number and never rewritten. |
+
+**If the call never appears in the log**, look at Blocked before dialling first. The common causes
+are a paused campaign (the gate only claims from `active` ones), every DID already at its daily cap,
+or `gate_result` of `surface` — a mobile with no consent grant.
+
+The console has no authentication, so the attested name is self-asserted, exactly as `reviewed_by`
+is on the review queue. That is a real limitation, not a design; see § 7c.
+
 ## 7b. Changing how Joe behaves on a call
 
 The opening line, the voice, the system prompt and the call-handling settings all live in this repo

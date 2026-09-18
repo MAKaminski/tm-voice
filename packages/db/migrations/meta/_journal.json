@@ -71,6 +71,13 @@
       "when": 1789674768844,
       "tag": "0009_meeting_parents",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789748808107,
+      "tag": "0010_curious_supreme_intelligence",
+      "breakpoints": true
     }
   ]
 }

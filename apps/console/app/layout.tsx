@@ -11,6 +11,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <nav>
           <Link className="brand" href="/">TM Voice</Link>
           <Link href="/">Campaigns</Link>
+          <Link href="/calls">Calls</Link>
           <Link href="/review">Review queue</Link>
           <Link href="/live">Live board</Link>
         </nav>

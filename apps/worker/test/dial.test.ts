@@ -42,6 +42,25 @@ describe("dial.claim in dry_run", () => {
     expect(c?.vapiCallId).toMatch(/^dryrun_/);
     expect(ctx.adapters.vapi.mock?.calls).toHaveLength(1);
   });
+  /**
+   * A console-placed test call can name its own assistant. Everything ingested from a campaign
+   * leaves it null and must still reach Joe, so both directions are pinned here.
+   */
+  it("dials the task's own assistant when set, and VAPI_ASSISTANT_ID when it is not", async () => {
+    if (!inWindow()) return;
+    const dana = r.contacts.find((x) => x.phoneE164 === SEED.phones.landlineGa)!;
+    const withId = { ...cfg, VAPI_ASSISTANT_ID: "asst_joe" };
+    const c2 = { ...ctx, cfg: withId, adapters: createAdapters(withId) } as Ctx;
+
+    await t.db.update(callTask).set({ status: "queued", gateResult: null, claimedAt: null, attemptNo: 0, assistantId: "asst_other" }).where(eq(callTask.contactId, dana.id));
+    await dialClaim(c2, { ...envelope });
+    expect(c2.adapters.vapi.mock?.calls.at(-1)?.args?.[0]).toMatchObject({ assistant_id: "asst_other" });
+
+    await t.db.update(callTask).set({ status: "queued", gateResult: null, claimedAt: null, attemptNo: 0, assistantId: null }).where(eq(callTask.contactId, dana.id));
+    await dialClaim(c2, { ...envelope });
+    expect(c2.adapters.vapi.mock?.calls.at(-1)?.args?.[0]).toMatchObject({ assistant_id: "asst_joe" });
+  });
+
   it("wireless is rejected with gate_result=surface and no CALL is created", async () => {
     const out = (await dialClaim(ctx, { ...envelope })) as { gate_result?: string };
     expect(out.gate_result).toBe("surface"); // surface check precedes the window check, so this holds at any hour

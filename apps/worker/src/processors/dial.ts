@@ -45,7 +45,10 @@ export const dialClaim: Processor<{ campaign_id?: string }> = async (ctx, payloa
   let res: Awaited<ReturnType<typeof ctx.adapters.vapi.createOutboundCall>>;
   try {
     res = await ctx.adapters.vapi.createOutboundCall({
-      to: claim.contact.phoneE164, from: d.phoneE164, assistant_id: ctx.cfg.VAPI_ASSISTANT_ID ?? "mock-assistant",
+      // The task's own assistant wins, so a console-placed test call can target one that is not
+      // this deployment's. Null — every campaign-ingested task — falls back to Joe.
+      to: claim.contact.phoneE164, from: d.phoneE164,
+      assistant_id: claim.task.assistantId ?? ctx.cfg.VAPI_ASSISTANT_ID ?? "mock-assistant",
       metadata: { call_task_id: claim.task.id, contact_id: claim.contact.id },
     });
   } catch (e) {

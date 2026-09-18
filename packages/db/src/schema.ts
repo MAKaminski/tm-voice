@@ -118,6 +118,13 @@ export const callTask = agents.table(
     status: callTaskStatus("status").notNull().default("queued"),
     gateResult: gateResult("gate_result"),
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    /**
+     * Which Vapi assistant answers this task. Null means the deployment's own assistant
+     * (`VAPI_ASSISTANT_ID`), which is Joe and is the only one this repo syncs. It is set per task
+     * rather than per campaign so a single console-placed test call can target a different
+     * assistant without a campaign existing for it.
+     */
+    assistantId: text("assistant_id"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

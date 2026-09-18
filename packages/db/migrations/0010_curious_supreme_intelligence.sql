@@ -1,0 +1,1 @@
+ALTER TABLE "agents"."call_task" ADD COLUMN "assistant_id" text;
