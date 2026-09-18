@@ -108,7 +108,7 @@ describe("vapi assistant sync", () => {
       firstMessage: DISCLOSURE,
       voice: { provider: "11labs", voiceId: "voice_joe", ...VOICE_PROFILE },
       backgroundSound: "off",
-      silenceTimeoutSeconds: 7,
+      silenceTimeoutSeconds: 20,
       startSpeakingPlan: { waitSeconds: 0.8 },
       stopSpeakingPlan: { numWords: 2, backoffSeconds: 1.5 },
     });
