@@ -1,6 +1,6 @@
 import { MOCK_FIXTURES, createAdapters, setMockCompletion } from "@tm/adapters";
 import { createProducer } from "@tm/api";
-import { meeting, recording, speakerTrack } from "@tm/db";
+import { meeting, recording, retainUntil, speakerTrack } from "@tm/db";
 import { createTestDb } from "@tm/db/test";
 import { loadConfig } from "@tm/shared";
 import { eq } from "drizzle-orm";
@@ -57,7 +57,7 @@ async function seedTranscribedMeeting(sessionId: string) {
       meetingId: m!.id, discordUserId: name, displayName: name, r2Key: key,
       durationSec: 30, byteSize: 1, transcriptionState: "pending",
     }).returning();
-    await t.db.insert(recording).values({ meetingId: m!.id, speakerTrackId: track!.id, r2Key: key, retainUntil: "2031-09-17" });
+    await t.db.insert(recording).values({ meetingId: m!.id, speakerTrackId: track!.id, r2Key: key, retainUntil: retainUntil(new Date()) });
   }
   await meetingPostcall(ctx, { ...env(m!.id), session_id: sessionId });
   return m!;
