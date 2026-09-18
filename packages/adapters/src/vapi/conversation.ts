@@ -48,11 +48,14 @@ export const speechPlanSchema = z.object({
   /** How long Joe stays quiet after being interrupted, so a cut-off is not a fight. */
   interruptBackoffSeconds: z.number().min(0).max(5),
   /**
-   * Silence before Joe says something rather than sitting there. A caller hearing nothing assumes
-   * the line dropped; ~7s is long enough not to trample a pause, short enough not to read as dead
-   * air. This is the setting that turns a slow turn into a brief wait instead of a hang-up.
+   * Silence before Vapi **ends the call**. It does not prompt Joe to speak — that was the belief
+   * behind the original 7s, and it is the opposite of what the field does, so a caller who went
+   * quiet to look up an email address was hung up on mid-lookup.
+   *
+   * Vapi's own default is 30s and its documented floor is 10s, so the old `min(5)` also let us
+   * configure a value Vapi would reject.
    */
-  silenceTimeoutSeconds: z.number().min(5).max(60),
+  silenceTimeoutSeconds: z.number().min(10).max(60),
   /** Hard cap on one call. A vendor-intake call that has run 8 minutes is not going to convert. */
   maxDurationSeconds: z.number().int().min(60).max(3600),
 });
@@ -62,7 +65,13 @@ export const SPEECH_PLAN: SpeechPlan = {
   startWaitSeconds: 0.8,
   interruptWords: 2,
   interruptBackoffSeconds: 1.5,
-  silenceTimeoutSeconds: 7,
+  /**
+   * 20s, not the 7s this was. Being asked for a vendor manager's email or a portal URL sends people
+   * to another system to look it up, and that is routinely 10-20 seconds of silence. Below Vapi's
+   * 30s default because a caller who has actually walked away should not hold the line for half a
+   * minute, and `maxDurationSeconds` is the only other thing that would end it.
+   */
+  silenceTimeoutSeconds: 20,
   maxDurationSeconds: 480,
 };
 

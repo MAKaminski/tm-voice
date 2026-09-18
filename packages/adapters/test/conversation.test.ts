@@ -35,18 +35,25 @@ describe("the call-handling settings", () => {
     expect(SPEECH_PLAN.interruptBackoffSeconds).toBeGreaterThan(0);
   });
 
-  it("breaks a silence before it reads as a dropped call", () => {
-    expect(SPEECH_PLAN.silenceTimeoutSeconds).toBeLessThanOrEqual(10);
+  /**
+   * This test used to assert the opposite -- `toBeLessThanOrEqual(10)` -- on the mistaken belief
+   * that the field prompts Joe to speak. It ends the call, so a low value is a hang-up timer and
+   * the test was pinning the bug in place.
+   */
+  it("leaves room to look something up before ending the call", () => {
+    expect(SPEECH_PLAN.silenceTimeoutSeconds).toBeGreaterThanOrEqual(15);
   });
 
   it("refuses a plan outside the ranges Vapi accepts", () => {
     expect(() => speechPlanSchema.parse({ ...SPEECH_PLAN, startWaitSeconds: 99 })).toThrow();
     expect(() => speechPlanSchema.parse({ ...SPEECH_PLAN, silenceTimeoutSeconds: 1 })).toThrow();
+    // Vapi's documented floor is 10s; anything under it is rejected at their API, not clamped.
+    expect(() => speechPlanSchema.parse({ ...SPEECH_PLAN, silenceTimeoutSeconds: 7 })).toThrow();
   });
 
   it("maps onto the Vapi field names", () => {
     expect(speechFields(SPEECH_PLAN)).toEqual({
-      silenceTimeoutSeconds: 7,
+      silenceTimeoutSeconds: 20,
       maxDurationSeconds: 480,
       startSpeakingPlan: { waitSeconds: 0.8 },
       stopSpeakingPlan: { numWords: 2, backoffSeconds: 1.5 },
