@@ -1,6 +1,6 @@
 import type { Adapters } from "@tm/adapters";
 import type { Producer } from "@tm/api";
-import { type AnyDb, consentEvent, meeting, recording, speakerTrack } from "@tm/db";
+import { type AnyDb, consentEvent, meeting, recording, retainUntil, speakerTrack } from "@tm/db";
 import { idempotencyKey, logger } from "@tm/shared";
 import { eq } from "drizzle-orm";
 import { RECORDING_NOTICE } from "./notice.js";
@@ -86,13 +86,6 @@ export interface FinaliseInput {
   /** Distinct non-bot members seen at any point, not the count at the end. */
   participantCount: number;
   tracks: FinishedTrack[];
-}
-
-/** retain_until is created + 5 years exactly; the DB CHECK recording_retain_5y refuses less. */
-export function retainUntil(from: Date): string {
-  const d = new Date(from);
-  d.setUTCFullYear(d.getUTCFullYear() + 5);
-  return d.toISOString().slice(0, 10);
 }
 
 /**

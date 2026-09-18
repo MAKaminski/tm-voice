@@ -1,6 +1,6 @@
 import { createAdapters } from "@tm/adapters";
 import { createProducer } from "@tm/api";
-import { account, call, callTask, contact, recording, seed, transcript } from "@tm/db";
+import { account, call, callTask, contact, recording, retainUntil, seed, transcript } from "@tm/db";
 import { createTestDb } from "@tm/db/test";
 import { loadConfig } from "@tm/shared";
 import { eq } from "drizzle-orm";
@@ -94,7 +94,7 @@ describe("apollo.logCall", () => {
 
   it("includes a signed recording link when there is a recording", async () => {
     const c = await completedCall("vapi_al_2");
-    await t.db.insert(recording).values({ callId: c.id, r2Key: "calls/2026/09/x.wav", retainUntil: "2031-09-17" });
+    await t.db.insert(recording).values({ callId: c.id, r2Key: "calls/2026/09/x.wav", retainUntil: retainUntil(new Date()) });
 
     await apolloLogCall(ctx, { ...env(c.id), vapi_call_id: "vapi_al_2" });
     const note = String((ctx.adapters.apollo.mock!.calls.at(-1)!.args[0] as { note: string }).note);
@@ -103,7 +103,7 @@ describe("apollo.logCall", () => {
 
   it("logs the call anyway when the link cannot be signed", async () => {
     const c = await completedCall("vapi_al_3");
-    await t.db.insert(recording).values({ callId: c.id, r2Key: "calls/2026/09/y.wav", retainUntil: "2031-09-17" });
+    await t.db.insert(recording).values({ callId: c.id, r2Key: "calls/2026/09/y.wav", retainUntil: retainUntil(new Date()) });
     const broken = { ...ctx, adapters: { ...ctx.adapters, r2: {
       ...ctx.adapters.r2, getSignedUrl: async () => { throw new Error("no r2 keys"); },
     } } } as Ctx;

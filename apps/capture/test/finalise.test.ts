@@ -1,11 +1,11 @@
 import { createAdapters } from "@tm/adapters";
 import { createProducer } from "@tm/api";
-import { consentEvent, meeting, recording, speakerTrack } from "@tm/db";
+import { consentEvent, meeting, recording, retainUntil, speakerTrack } from "@tm/db";
 import { createTestDb } from "@tm/db/test";
 import { loadConfig } from "@tm/shared";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type Deps, finaliseMeeting, retainUntil, startMeeting } from "../src/finalise.js";
+import { type Deps, finaliseMeeting, startMeeting } from "../src/finalise.js";
 import { mintSessionId } from "../src/watch.js";
 
 const cfg = loadConfig({ DATABASE_URL: "x", INTERNAL_API_TOKEN: "0123456789abcdef0123", WATCH_CHANNEL_IDS: "chan-a" });
@@ -80,7 +80,7 @@ describe("finaliseMeeting", () => {
     const recs = await t.db.select().from(recording).where(eq(recording.meetingId, r.meetingId));
     expect(recs).toHaveLength(2);
     // recording_retain_5y would have rejected anything shorter.
-    expect(recs[0]!.retainUntil).toBe("2031-09-17");
+    expect(recs[0]!.retainUntil).toBe(retainUntil(endedAt));
     expect(recs[0]!.callId).toBeNull();
 
     const [m] = await t.db.select().from(meeting).where(eq(meeting.id, r.meetingId));
@@ -107,7 +107,10 @@ describe("finaliseMeeting", () => {
 
 describe("retention", () => {
   it("is exactly five years, which is the floor the DB check enforces", () => {
-    expect(retainUntil(new Date("2026-09-17T00:00:00Z"))).toBe("2031-09-17");
-    expect(retainUntil(new Date("2028-02-29T00:00:00Z"))).toBe("2033-03-01");
+    // `now` is pinned so these assert the rule, not the date the suite runs on.
+    expect(retainUntil(new Date("2026-09-17T00:00:00Z"), new Date("2026-09-17T00:00:00Z"))).toBe("2031-09-17");
+    expect(retainUntil(new Date("2028-02-29T00:00:00Z"), new Date("2028-02-29T00:00:00Z"))).toBe("2033-03-01");
+    // A meeting that ended before midnight but was finalised after it must still clear the CHECK.
+    expect(retainUntil(new Date("2026-09-17T23:55:00Z"), new Date("2026-09-18T00:05:00Z"))).toBe("2031-09-18");
   });
 });
