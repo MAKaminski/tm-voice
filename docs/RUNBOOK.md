@@ -308,8 +308,13 @@ way. Do **not** work around it by changing `VOICE_PROFILE.model` — that trades
 is priced on (§ 7 above) for a training job that should simply be re-run. `dispositionFor` already
 records these as `failed`, so the calls are counted correctly; they are just all failures.
 
-**If a caller reports long silences**, check in this order: (1) `silenceTimeoutSeconds` in
-`SPEECH_PLAN` — Joe should break a silence before it reads as a dropped call; (2) the worker log for
+**If Joe hangs up on people**, the first suspect is `silenceTimeoutSeconds` in `SPEECH_PLAN`. It is
+the timer Vapi uses to **end the call** on silence — it does not prompt Joe to speak. Asking for an
+email address or a portal URL sends people off to look it up, and a value below about 15s cuts them
+off mid-lookup, which the caller experiences as being hung up on. Vapi's own default is 30s and its
+floor is 10s.
+
+**If a caller reports long silences**, check in this order: (1) the worker log for
 `vapi called a tool with no route on this service`, which means the dashboard has a tool the api
 does not implement and the catch-all is covering for it; (3) the model configured in the dashboard,
 which the repo does not own.
