@@ -16,7 +16,16 @@ const producer = createProducer(cfg.REDIS_URL, async (queue, name) => {
 });
 warnIfMocked(cfg, adapters);
 const app = createApp({ cfg, db, adapters, producer, redis });
-serve({ fetch: app.fetch, port: cfg.PORT }, (info) => logger.info({ port: info.port, dial_mode: cfg.DIAL_MODE }, "api listening"));
+/**
+ * `::` rather than the default `0.0.0.0`, and it is why the console could not reach this service.
+ *
+ * Railway's private network (`<service>.railway.internal`) resolves to IPv6 only. Bound to
+ * 0.0.0.0 the api answered the public edge proxy perfectly — `GET /health` 200 all day — while
+ * every request from the console was refused before it left the container, so the api logged
+ * nothing at all and the Calls tab read "Could not reach the api". `::` accepts both families,
+ * so the public domain keeps working and private traffic starts to.
+ */
+serve({ fetch: app.fetch, port: cfg.PORT, hostname: "::" }, (info) => logger.info({ port: info.port, host: "::", dial_mode: cfg.DIAL_MODE }, "api listening"));
 
 /** A vendor left on fixtures outside dry_run is a configuration gap, not a mode. Say so loudly. */
 function warnIfMocked(c: typeof cfg, a: typeof adapters) {
