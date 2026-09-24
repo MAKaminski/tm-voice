@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  BACKGROUND_SOUND, CONVERSATION_RULES, type Facts, OBJECTIVE, SPEECH_PLAN, buildSystemPrompt,
+  BACKGROUND_SOUND, CLOSING_REMINDER, type Facts, JOE_PROMPT, SPEECH_PLAN, buildSystemPrompt,
   mergeSystemPrompt, renderFacts, speechFields, speechPlanSchema, systemPromptOf,
 } from "../src/index.js";
 
@@ -61,51 +61,54 @@ describe("the call-handling settings", () => {
   });
 });
 
-describe("the objective", () => {
-  it("is the vendor manager's contact details and nothing else", () => {
-    expect(OBJECTIVE).toContain("who at this company approves maintenance vendors");
-    for (const field of ["name", "job title", "email address", "direct phone number"]) {
-      expect(OBJECTIVE).toContain(field);
-    }
+describe("Joe's rules", () => {
+  // The complaint this prompt answers: calls ending with no goodbye. These pin the fix itself.
+  it("gates hanging up on a live person behind the questions-and-goodbye sequence", () => {
+    expect(JOE_PROMPT).toContain("Before you are allowed to call the endCall tool with a live human on the line");
+    expect(JOE_PROMPT).toContain("Before I let you go, are there any questions I can");
+    expect(JOE_PROMPT).toContain('"I appreciate your time, take care."');
+    expect(JOE_PROMPT).toContain("If all three have not happened, you may not end");
   });
 
-  it("says plainly that nothing is being sold or booked", () => {
-    expect(OBJECTIVE).toContain("not selling");
-    expect(OBJECTIVE).toContain("not booking");
-  });
-});
-
-describe("the conversation rules", () => {
-  it("makes answering a question a complete turn", () => {
-    expect(CONVERSATION_RULES).toContain("Answering a question is a complete turn");
-    expect(CONVERSATION_RULES).toContain("Do not follow an answer with a pitch");
+  it("treats silence as a lookup, never as the end of the call", () => {
+    expect(JOE_PROMPT).toContain("Silence is not permission to leave.");
+    expect(JOE_PROMPT).toContain("Never treat silence as the end of the call.");
   });
 
-  it("forbids asking the same thing again next turn", () => {
-    expect(CONVERSATION_RULES).toContain("do not ask again in your next turn");
-    expect(CONVERSATION_RULES).toContain("three times in a row");
+  it("still ends at once on an opt-out, through the opt_out tool", () => {
+    expect(JOE_PROMPT).toContain("Call the opt_out tool");
   });
 
-  it("forbids one question stacked on another", () => {
-    expect(CONVERSATION_RULES).toContain("Ask for one thing at a time");
+  it("never lets Joe offer to help them", () => {
+    expect(JOE_PROMPT).toContain("You are the one asking. Never ask them what they need.");
   });
 
-  it("tells it to repeat from memory rather than calling a tool", () => {
-    expect(CONVERSATION_RULES).toContain("Do not call a tool to repeat");
-    expect(CONVERSATION_RULES).toContain("sounds like the call has dropped");
+  it("never claims to be human", () => {
+    expect(JOE_PROMPT).toContain("Never claim to be human.");
+    expect(JOE_PROMPT).toContain("in AI form");
   });
 
-  it("requires the spelled-out email read-back at dictation speed", () => {
-    expect(CONVERSATION_RULES).toContain("letter by letter");
-    expect(CONVERSATION_RULES).toContain("Never read an email address back as a single word");
+  it("reads contact details back slowly, from memory, with no tool in the way", () => {
+    expect(JOE_PROMPT).toContain("read back email addresses letter by letter");
+    expect(JOE_PROMPT).toContain("Never read an email address back as a single word");
+    expect(JOE_PROMPT).not.toContain("capture_contact");
   });
 
-  it("keeps the packet out of the call unless asked", () => {
-    expect(CONVERSATION_RULES).toContain("unless the caller asks for it first");
+  /**
+   * docs/COMPLIANCE.md: 47 CFR 64.1200(b) requires an artificial voice to say so at the outset. The
+   * fixed opening line is spoken during a voicemail greeting, before the beep, so it never reaches
+   * the recording; the message has to carry the notice itself.
+   */
+  it("opens the voicemail and screener lines with the artificial-voice notice", () => {
+    const vm = JOE_PROMPT.slice(JOE_PROMPT.indexOf("deliver this message once"));
+    expect(vm.slice(0, 200)).toContain("automated assistant using an artificial");
+    const screener = JOE_PROMPT.slice(JOE_PROMPT.indexOf("Automated screener"));
+    expect(screener.slice(0, 250)).toContain("automated assistant using an artificial");
   });
 
-  it("keeps the truthful-about-being-a-bot rule", () => {
-    expect(CONVERSATION_RULES).toContain("Never deny it");
+  it("allows licence numbers only from the TM-OS list, and never insurance limits", () => {
+    expect(JOE_PROMPT).toContain("Never state TM's insurance limits or EIN.");
+    expect(JOE_PROMPT).toContain('listed under "What you may state about the company"');
   });
 });
 
@@ -118,6 +121,20 @@ describe("the assembled prompt", () => {
 
   it("includes the campaign's own script body", () => {
     expect(prompt).toContain("Ask about vendors.");
+  });
+
+  /**
+   * The rules that must hold go first and are restated last, because the start and the end of a
+   * long prompt are what a model weights most. Everything assembled from data goes in between.
+   */
+  it("puts Section 0 first and the closing reminder last, with the data in between", () => {
+    expect(prompt.startsWith(JOE_PROMPT)).toBe(true);
+    expect(prompt.endsWith(CLOSING_REMINDER)).toBe(true);
+    const section0 = prompt.indexOf("SECTION 0");
+    for (const middle of ["Ask about vendors.", "## What you may state about the company", "## The opening line"]) {
+      expect(prompt.indexOf(middle)).toBeGreaterThan(section0);
+      expect(prompt.indexOf(middle)).toBeLessThan(prompt.indexOf(CLOSING_REMINDER));
+    }
   });
 
   it("refuses to build without a disclosure line", () => {
