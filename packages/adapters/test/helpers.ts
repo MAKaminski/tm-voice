@@ -23,9 +23,9 @@ export function realConfig(over: Record<string, string> = {}) {
   return loadConfig({ ...base, ...allKeys, REDIS_URL: "redis://x", DIAL_MODE: "live", ...over });
 }
 
-export interface RecordedCall { url: string; method: string; headers: Record<string, string>; body?: string }
+export interface RecordedCall { url: string; method: string; headers: Record<string, string>; body?: string; redirect?: RequestInit["redirect"] }
 
-export interface StubResponse { status?: number; json?: unknown; text?: string }
+export interface StubResponse { status?: number; json?: unknown; text?: string; headers?: Record<string, string> }
 
 /**
  * Replaces global fetch for the duration of a test. `handler` returns the response for each
@@ -48,6 +48,7 @@ export function stubFetch(handler: (call: RecordedCall) => StubResponse | Promis
       method: init?.method ?? req?.method ?? "GET",
       headers,
       body: typeof body === "string" && body.length ? body : undefined,
+      ...(init?.redirect ? { redirect: init.redirect } : {}),
     };
     calls.push(call);
     const r = await handler(call);
@@ -55,7 +56,7 @@ export function stubFetch(handler: (call: RecordedCall) => StubResponse | Promis
     const text = r.text ?? (r.json === undefined ? "" : JSON.stringify(r.json));
     // Only claim JSON when the test actually supplied JSON: the S3 SDK parses by content-type
     // and chokes on an empty body labelled application/json.
-    const resHeaders = r.json === undefined ? undefined : { "content-type": "application/json" };
+    const resHeaders = { ...(r.json === undefined ? {} : { "content-type": "application/json" }), ...r.headers };
     return new Response(status === 204 || !text ? null : text, { status, headers: resHeaders });
   });
   return calls;
