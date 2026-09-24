@@ -287,9 +287,11 @@ mock, so `updateAssistant` records the PATCH it *would* have sent and the live a
 touched. A behaviour fix merged while the system is in `dry_run` reaches a real call only once the
 mode is `verified_only` or `live`.
 
-The job runs every 24h and on worker boot, so a deploy is usually enough. To force it, restart the
-worker. To see what it would do without waiting, the drift list is in the worker log line
-`vapi assistant reconciled to the checked-in profile`.
+The job runs every 24h. It does **not** run on worker boot, so neither a deploy nor a restart pushes a
+change: on 2026-09-18 the worker restarted three times with the assistant out of sync, and nothing
+was pushed until the scheduled run at 23:21 UTC. Budget up to a day for a merged change to reach a
+call. What each run changed is in the worker log line `vapi assistant reconciled to the checked-in
+profile`, with the drifted fields listed; a run that finds nothing to change logs nothing.
 
 **If a caller still reports background noise** after a sync has run with `backgroundSound: "off"`,
 the remaining suspect is the ElevenLabs voice itself — a voice cloned from a recording with room
