@@ -57,7 +57,7 @@ Then create three services from this repo (dashboard → New → GitHub repo, or
 | `AUTO_BOOK` | ✓ | | | `false` |
 | `NODE_ENV` | ✓ | ✓ | ✓ | `production` |
 
-Run migrations once from your machine against the Railway Postgres: `DATABASE_URL=<railway url> pnpm db:migrate && pnpm db:seed`. Verify: `curl https://<api-domain>/health` returns `ok:true`, `dial_mode:"dry_run"`, 8 vendors `mode:"mock"`.
+Migrations run on their own: the api's `start` script applies any pending migration before it serves, so every deploy brings the database up to the code it ships. A migration that fails stops the api from starting, its health check never passes, and Railway keeps the previous deployment serving — a failed migration shows up in the api's deploy log, not as a missing column days later. Only the api migrates; the worker does not, so the two never race. Seed once from your machine: `DATABASE_URL=<railway url> pnpm db:seed`. Verify: `curl https://<api-domain>/health` returns `ok:true`, `dial_mode:"dry_run"`, 8 vendors `mode:"mock"`.
 
 ## 4. Vendor keys — paste list (each → 1Password "TM Voice" item → Railway variable on api + worker)
 
