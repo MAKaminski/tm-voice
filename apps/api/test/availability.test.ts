@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createAdapters } from "@tm/adapters";
+import { createHcpAdapter, defaultHcpMockState, mockJobsFor } from "@tm/adapters";
 import { scheduleBlock, seed, SEED } from "@tm/db";
 import { createTestDb } from "@tm/db/test";
 import { loadConfig } from "@tm/shared";
@@ -46,7 +46,12 @@ describe("availability: slots from seeded techs/jobs", () => {
 
 describe("materialize from the (mock) HCP adapter", () => {
   it("upserts technicians by hcp_employee_id and replaces job/window blocks idempotently", async () => {
-    const { hcp } = createAdapters(cfg);
+    // The mock's jobs are pinned to DAY, the same day the seed uses, rather than left on its default
+    // of "tomorrow by the real clock". Left on the default, the jobs drifted with the calendar while
+    // `now` below stayed frozen, and once real tomorrow passed the 14-day horizon (on 2026-09-23)
+    // the mock returned nothing and this failed on main for every PR — the same trap as the
+    // retention fixtures fixed in #19. Every date here now comes from one fixed clock.
+    const hcp = createHcpAdapter(cfg, { ...defaultHcpMockState(), jobs: mockJobsFor(DAY) });
     const a = await materialize(t.db, hcp, new Date("2026-09-09T12:00:00Z"));
     const b = await materialize(t.db, hcp, new Date("2026-09-09T12:00:00Z"));
     expect(a.technicians).toBe(3);
