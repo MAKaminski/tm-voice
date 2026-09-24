@@ -3,8 +3,12 @@ import { logger } from "@tm/shared";
 import { eq } from "drizzle-orm";
 import type { Processor } from "../context.js";
 
-/** What postcall.process enqueues once it knows a recording exists. */
-export type RecordingPayload = { vapi_call_id: string; recording_url: string };
+/**
+ * What postcall.process enqueues once it knows a recording exists. `recording_url` is only that
+ * signal now: the download goes through Vapi's authenticated endpoint by call id, because the URL
+ * itself answers 400 to a direct fetch. Kept on the payload so jobs already queued still parse.
+ */
+export type RecordingPayload = { vapi_call_id: string; recording_url?: string };
 
 /** `calls/<yyyy>/<mm>/<call_id>.<ext>` — one prefix per month, so a retention sweep is one listing. */
 export function recordingKey(callId: string, startedAt: Date, contentType: string): string {
@@ -36,7 +40,7 @@ export const postcallRecording: Processor<RecordingPayload> = async (ctx, p) => 
   const [existing] = await ctx.db.select({ id: recording.id }).from(recording).where(eq(recording.callId, c.id)).limit(1);
   if (existing) return { skipped: "already_stored", recording_id: existing.id };
 
-  const { bytes, contentType } = await ctx.adapters.vapi.downloadRecording(p.recording_url);
+  const { bytes, contentType } = await ctx.adapters.vapi.downloadRecording(p.vapi_call_id);
   const key = recordingKey(c.id, c.startedAt, contentType);
   await ctx.adapters.r2.putObject(key, bytes, contentType);
 

@@ -115,13 +115,21 @@ export interface VapiAdapter extends Adapter {
    */
   updateAssistant(id: string, desired: AssistantDesiredState, live?: LiveAssistant): Promise<{ id: string; synthetic: boolean }>;
   /**
-   * Fetch a recording Vapi has stored. The URL comes from the end-of-call report or `getCall`, and
-   * is short-lived — which is why the caller is a retryable job rather than an inline step.
+   * Fetch a call's recording from Vapi, by call id.
+   *
+   * Vapi's recording storage is private. The `recordingUrl` in an end-of-call report can no longer
+   * be fetched directly: an unauthenticated GET to it answers 400, which is what every attempt did
+   * until this changed, so no recording was ever stored. The documented route is
+   * `GET /call/{id}/mono-recording` with the private key, which answers 302 to a short-lived
+   * pre-signed URL (docs.vapi.ai/assistants/retrieve-call-artifacts).
+   *
+   * Mono because it is the combined track the old `recordingUrl` pointed at, and one file per call
+   * is what docs/COMPLIANCE.md commits to keeping.
    *
    * Lives in the adapter rather than the processor because it is a vendor fetch like any other
    * (rule 1), and because the timeout and error classification then match every other Vapi call.
    */
-  downloadRecording(url: string): Promise<{ bytes: Uint8Array; contentType: string }>;
+  downloadRecording(vapiCallId: string): Promise<{ bytes: Uint8Array; contentType: string }>;
   /**
    * Verifies a Vapi server webhook. Vapi sends the configured server secret as `x-vapi-secret`;
    * an HMAC-SHA256 in `x-vapi-signature` is also accepted for forward compatibility.
@@ -153,9 +161,9 @@ export function createVapiAdapter(cfg: Config): VapiAdapter & { mock?: MockRecor
         return { id: `dryrun_${v.metadata.call_task_id}`, synthetic: true };
       },
       async getCall(id) { mock.record("getCall", id); return { id, status: "ended" }; },
-      async downloadRecording(url) {
-        mock.record("downloadRecording", url);
-        return { bytes: new TextEncoder().encode(`mock-audio:${url}`), contentType: "audio/wav" };
+      async downloadRecording(vapiCallId) {
+        mock.record("downloadRecording", vapiCallId);
+        return { bytes: new TextEncoder().encode(`mock-audio:${vapiCallId}`), contentType: "audio/wav" };
       },
       async getAssistant(id) { mock.record("getAssistant", id); return { id }; },
       async updateAssistant(id, desired, live) {
@@ -225,21 +233,46 @@ export function createVapiAdapter(cfg: Config): VapiAdapter & { mock?: MockRecor
         transcript: res.artifact?.transcript,
       };
     },
-    async downloadRecording(url) {
+    async downloadRecording(vapiCallId) {
       // Not through `request()`: that helper decodes JSON, and this is audio. The error shape is
       // mapped by hand to match what every other Vapi method throws.
-      let res: Response;
-      try {
-        res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
-      } catch (e) {
-        throw new AdapterError({ vendor: "vapi", code: "network_error", retryable: true, raw: (e as Error).message });
-      }
-      if (!res.ok) {
-        // A recording URL expires, and an expired one is not worth retrying forever.
-        throw new AdapterError({ vendor: "vapi", code: `http_${res.status}`, retryable: res.status === 429 || res.status >= 500, raw: url });
+      //
+      // Two hops, and the redirect is followed by hand rather than by fetch. The key belongs on the
+      // first request only: the second goes to a pre-signed URL whose signature is its credential,
+      // and a pre-signed store that also receives an Authorization header rejects the request as
+      // carrying two auth mechanisms. Following manually makes "the key never leaves api.vapi.ai"
+      // a property of this code rather than of the runtime's redirect handling.
+      const endpoint = `${API}/call/${encodeURIComponent(vapiCallId)}/mono-recording`;
+      const get = async (url: string, headers: Record<string, string>, hop: string) => {
+        try {
+          return await fetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(60_000) });
+        } catch (e) {
+          throw new AdapterError({ vendor: "vapi", code: "network_error", retryable: true, raw: `${hop}: ${(e as Error).message}` });
+        }
+      };
+      // A failure says which hop failed and what came back, because "vapi: http_400" alone cost a
+      // day: it could not say whether the request, the key or the call was at fault. The signed URL
+      // is never included — its query string is a credential.
+      const fail = async (res: Response, hop: string): Promise<never> => {
+        const body = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
+        throw new AdapterError({
+          vendor: "vapi", code: `http_${res.status}`, retryable: res.status === 429 || res.status >= 500,
+          message: `vapi: http_${res.status} on ${hop} for call ${vapiCallId}${body ? `: ${body}` : ""}`,
+          raw: { hop, status: res.status, body },
+        });
+      };
+
+      let res = await get(endpoint, auth, "mono-recording");
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) throw new AdapterError({ vendor: "vapi", code: "redirect_without_location", retryable: false, raw: vapiCallId });
+        res = await get(new URL(location, API).toString(), {}, "signed-download");
+        if (!res.ok) return fail(res, "signed-download");
+      } else if (!res.ok) {
+        return fail(res, "mono-recording");
       }
       const bytes = new Uint8Array(await res.arrayBuffer());
-      if (bytes.byteLength === 0) throw new AdapterError({ vendor: "vapi", code: "empty_recording", retryable: false, raw: url });
+      if (bytes.byteLength === 0) throw new AdapterError({ vendor: "vapi", code: "empty_recording", retryable: false, raw: vapiCallId });
       return { bytes, contentType: res.headers.get("content-type") ?? "audio/wav" };
     },
     async getAssistant(id) {

@@ -164,3 +164,55 @@ describe("vapi assistant sync", () => {
     expect(rec.args[2]).toMatchObject({ model: { messages: [{ role: "system", content: "You are Joe." }] } });
   });
 });
+
+/**
+ * Vapi's recording storage is private: the `recordingUrl` in an end-of-call report answers 400 to a
+ * direct GET, which is why no recording was ever stored. These pin the documented route
+ * (docs.vapi.ai/assistants/retrieve-call-artifacts) and, above all, where the key is sent.
+ */
+describe("vapi downloadRecording", () => {
+  const SIGNED = "https://signed.example.com/rec.wav?X-Amz-Signature=secret-sig";
+  const twoHops = (second: { status?: number; text?: string; headers?: Record<string, string> } = {}) => stubFetch((c) =>
+    c.url.startsWith("https://api.vapi.ai/")
+      ? { status: 302, headers: { location: SIGNED } }
+      : { status: 200, text: "RIFF-audio-bytes", headers: { "content-type": "audio/wav" }, ...second });
+
+  it("asks Vapi for the call's mono recording by id, with the key, and follows the redirect by hand", async () => {
+    const calls = twoHops();
+    const out = await createVapiAdapter(realConfig()).downloadRecording("call_abc");
+    expect(calls[0]!.url).toBe("https://api.vapi.ai/call/call_abc/mono-recording");
+    expect(calls[0]!.headers["authorization"]).toMatch(/^Bearer /);
+    expect(calls[0]!.redirect).toBe("manual");
+    expect(calls[1]!.url).toBe(SIGNED);
+    expect(new TextDecoder().decode(out.bytes)).toBe("RIFF-audio-bytes");
+    expect(out.contentType).toBe("audio/wav");
+  });
+
+  it("never sends the key to the signed URL", async () => {
+    // The signature is the second hop's credential. A pre-signed store that also receives an
+    // Authorization header rejects the request as carrying two auth mechanisms.
+    const calls = twoHops();
+    await createVapiAdapter(realConfig()).downloadRecording("call_abc");
+    expect(calls[1]!.headers["authorization"]).toBeUndefined();
+  });
+
+  it("says which hop failed and what came back, without leaking the signed URL", async () => {
+    twoHops({ status: 403, text: "<Error><Code>AccessDenied</Code></Error>" });
+    const err = await createVapiAdapter(realConfig()).downloadRecording("call_abc").catch((e: Error) => e);
+    expect(String(err)).toContain("http_403 on signed-download for call call_abc");
+    expect(String(err)).toContain("AccessDenied");
+    expect(String(err)).not.toContain("secret-sig");
+  });
+
+  it("reports a refusal from Vapi itself as the first hop", async () => {
+    stubFetch(() => ({ status: 404, text: '{"message":"Recording not found"}' }));
+    const err = await createVapiAdapter(realConfig()).downloadRecording("call_abc").catch((e: Error) => e);
+    expect(String(err)).toContain("http_404 on mono-recording for call call_abc");
+    expect(String(err)).toContain("Recording not found");
+  });
+
+  it("treats a redirect with nowhere to go as a failure, not an empty recording", async () => {
+    stubFetch(() => ({ status: 302 }));
+    await expect(createVapiAdapter(realConfig()).downloadRecording("call_abc")).rejects.toThrow("redirect_without_location");
+  });
+});
