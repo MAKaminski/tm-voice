@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(cat:*)",
+      "Bash(find:*)",
+      "Bash(git:*)",
+      "Bash(pnpm run ci)",
+      "Bash(pnpm --filter:*)",
+      "Bash(curl -sS -m 40 https://console-production-e58c.up.railway.app/*)"
+    ]
+  }
+}
