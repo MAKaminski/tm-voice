@@ -11,7 +11,7 @@
     "test": "echo 'console: no unit tests in Phase 0-2 (booking page covered by apps/api tests + browser check)'"
   },
   "dependencies": {
-    "next": "^15.1.0",
+    "next": "^15.5.27",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
